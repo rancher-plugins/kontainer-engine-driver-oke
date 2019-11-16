@@ -613,7 +613,7 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 		return nil, errors.Wrap(err, "could not retrieve the cluster")
 	}
 
-	kubeConfig, _, err := oke.GetKubeconfigByClusterID(ctx, state.ClusterID)
+	kubeConfig, _, err := oke.GetKubeconfigByClusterID(ctx, state.ClusterID, state.Region)
 	if err != nil {
 		return nil, errors.Wrap(err, "could not retrieve the Oracle Container Engine kubeconfig")
 	}
@@ -630,7 +630,10 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 		info.RootCaCertificate = kubeConfig.Clusters[0].Cluster.CertificateAuthorityData
 	}
 	if len(kubeConfig.Users) > 0 {
-		info.ServiceAccountToken = kubeConfig.Users[0].User.Token
+		if kubeConfig.Users[0].User.Token != "" {
+			info.ServiceAccountToken = kubeConfig.Users[0].User.Token
+		}
+		// TODO handle info.ExecCredential once it is supported
 	}
 
 	return info, nil

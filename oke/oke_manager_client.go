@@ -19,8 +19,10 @@ ClusterManagerClient is a client for interacting with Oracle Cloud Engine API. I
 providing CRUD operations for the OKE cluster and VCN.
 */
 import (
+	"encoding/base64"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"strings"
 	"time"
 
@@ -830,7 +832,7 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 }
 
 // GetKubeconfigByClusterID is a wrapper for the CreateKubeconfig operation that that handles errors and unmarshaling, or it returns an error.
-func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, clusterID string) (store.KubeConfig, string, error) {
+func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, clusterID, region string) (store.KubeConfig, string, error) {
 	logrus.Debugf("getting KUBECONFIG with cluster ID %s", clusterID)
 
 	kubeconfig := &store.KubeConfig{}
@@ -857,6 +859,21 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 	if err != nil {
 		logrus.Debugf("error unmarshalling kubeconfig %v", err)
 		return store.KubeConfig{}, "", nil
+	}
+
+	if len(kubeconfig.Users) > 0 && kubeconfig.Users[0].User.Token == "" {
+		// Generate the token here rather than using exec credentials, which is not supported by rancher's KubeConfig and ClusterInfo types.
+		logrus.Info("generating a /v2 (exec based) kubeconfig token")
+		requestSigner := common.RequestSigner(mgr.configuration, common.DefaultGenericHeaders(), common.DefaultBodyHeaders())
+		interceptor := func(r *http.Request) error {
+			return nil
+		}
+		expiringToken, err := generateToken(newTokenSigner(requestSigner, interceptor), region, clusterID)
+		if err != nil {
+			logrus.Debugf("error generating /v2 kubeconfig token %v", err)
+			return store.KubeConfig{}, "", nil
+		}
+		kubeconfig.Users[0].User.Token = expiringToken
 	}
 
 	return *kubeconfig, string(content), nil
@@ -1395,4 +1412,52 @@ func getDefaultKubernetesVersion(client containerengine.ContainerEngineClient) (
 
 	// TODO assuming the last item in the list is the latest version.
 	return &kubernetesVersion[len(kubernetesVersion)-1], nil
+}
+
+type SignRequest func(*http.Request) (*http.Request, error)
+
+// generateToken generates a v2 token using the signer and cluster id similar to what
+// oci ce cluster generate-token --cluster-id does.
+func generateToken(sign SignRequest, region string, clusterID string) (string, error) {
+	requiredHeaders := []string{"date", "authorization"}
+
+	endpoint := fmt.Sprintf("https://containerengine.%s.oraclecloud.com/cluster_request/%s", region, clusterID)
+	req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+
+	req, err = sign(req)
+	if err != nil {
+		return "", err
+	}
+
+	url := req.URL
+	query := url.Query()
+	for _, header := range requiredHeaders {
+		query.Set(header, req.Header.Get(header))
+	}
+
+	url.RawQuery = query.Encode()
+
+	return base64.URLEncoding.EncodeToString([]byte(url.String())), nil
+}
+
+func newTokenSigner(requestSigner common.HTTPRequestSigner, interceptor common.RequestInterceptor) SignRequest {
+	return func(r *http.Request) (*http.Request, error) {
+		r.Header.Set("date", time.Now().UTC().Format(http.TimeFormat))
+		r.Header.Set("user-agent", "OKERancherDriver")
+
+		err := interceptor(r)
+		if err != nil {
+			return nil, err
+		}
+
+		err = requestSigner.Sign(r)
+		if err != nil {
+			return nil, err
+		}
+
+		return r, nil
+	}
 }
