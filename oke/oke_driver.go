@@ -464,6 +464,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	clusterInfo := &types.ClusterInfo{}
 	err = storeState(clusterInfo, state)
 	if err != nil {
+		logrus.Debugf("error storing state %v", err)
 		return clusterInfo, err
 	}
 
@@ -540,15 +541,18 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 
 	logrus.Infof("Creating OKE cluster %s", state.Name)
 	err = oke.CreateCluster(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
-	_ = storeState(clusterInfo, state)
 	if err != nil {
-		logrus.Debugf("error creating the cluster %v", err)
+		logrus.Debugf("error creating the OKE cluster %v", err)
+		return clusterInfo, err
+	}
+	err = storeState(clusterInfo, state)
+	if err != nil {
+		logrus.Debugf("error storing state %v", err)
 		return clusterInfo, err
 	}
 
 	logrus.Infof("Creating node pool for %s", state.Name)
 	err = oke.CreateNodePool(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
-	_ = storeState(clusterInfo, state)
 	if err != nil {
 		logrus.Debugf("error creating the node pool %v", err)
 		return clusterInfo, err
@@ -556,6 +560,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 
 	err = storeState(clusterInfo, state)
 	if err != nil {
+		logrus.Debugf("error storing state %v", err)
 		return clusterInfo, err
 	}
 
@@ -852,7 +857,8 @@ func (d *OKEDriver) RemoveLegacyServiceAccount(ctx context.Context, info *types.
 	return nil
 }
 
-// constructClusterManagerClient is a helper function that constructs a new NewClusterManagerClient based on the state.
+// constructClusterManagerClient is a helper function that constructs a new
+// NewClusterManagerClient based on the state.
 func constructClusterManagerClient(ctx context.Context, state State) (ClusterManagerClient, error) {
 	configurationProvider := common.NewRawConfigurationProvider(
 		state.TenancyID,
@@ -870,7 +876,8 @@ func constructClusterManagerClient(ctx context.Context, state State) (ClusterMan
 	return *clusterMgrClient, nil
 }
 
-// remove is a helper function that removes an element at the specified index from a string array.
+// remove is a helper function that removes an element at the specified index
+// from a string array.
 func remove(slice []string, s int) []string {
 	return append(slice[:s], slice[s+1:]...)
 }

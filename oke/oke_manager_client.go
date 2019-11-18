@@ -15,8 +15,9 @@
 package oke
 
 /*
-ClusterManagerClient is a client for interacting with Oracle Cloud Engine API. It does all of the real work in
-providing CRUD operations for the OKE cluster and VCN.
+ClusterManagerClient is a client for interacting with Oracle Cloud Engine API.
+It does all of the real work in providing CRUD operations for the OKE cluster
+and VCN.
 */
 import (
 	"encoding/base64"
@@ -65,7 +66,8 @@ type ClusterManagerClient struct {
 	// TODO we could also include the retry settings here
 }
 
-// NewClusterManagerClient creates a new OCI cluster manager, which has a set of clients (CE, VCN, Identity).
+// NewClusterManagerClient creates a new OCI cluster manager, which has a set of
+// clients (CE, VCN, Identity).
 func NewClusterManagerClient(configuration common.ConfigurationProvider) (*ClusterManagerClient, error) {
 
 	containerClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(configuration)
@@ -93,7 +95,8 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 	return c, nil
 }
 
-// CreateCluster creates a new cluster with no initial node pool and attaches it to the existing network resources, or an error.
+// CreateCluster creates a new cluster with no initial node pool and attaches
+// it to the existing network resources, or an error.
 // TODO stop passing in state
 func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State, vcnID string, serviceSubnetIds, nodeSubnetIds []string) error {
 	if state == nil {
@@ -170,7 +173,8 @@ func (mgr *ClusterManagerClient) GetClusterByID(ctx context.Context, clusterID s
 	return resp.Cluster, nil
 }
 
-// GetClusterByName returns the Cluster ID of the Cluster with the specified name in the specified compartment or an error if it is not found.
+// GetClusterByName returns the Cluster ID of the Cluster with the specified
+// name in the specified compartment or an error if it is not found.
 func (mgr *ClusterManagerClient) GetClusterByName(ctx context.Context, compartmentID, name string) (string, error) {
 	logrus.Debugf("getting cluster with name %s", name)
 
@@ -198,7 +202,8 @@ func (mgr *ClusterManagerClient) GetClusterByName(ctx context.Context, compartme
 	return "", fmt.Errorf("%s not found", name)
 }
 
-// CreateNodePool creates a new node pool (i.e. a set of compute nodes) for the cluster, or an error.
+// CreateNodePool creates a new node pool (i.e. a set of compute nodes) for the
+// cluster, or an error.
 // TODO stop passing in state
 func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *State, vcnID string, serviceSubnetIds, nodeSubnetIds []string) error {
 	if state == nil {
@@ -289,7 +294,8 @@ func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID s
 	return nil
 }
 
-// UpdateKubernetesMasterVersion updates the version of Kubernetes on the master(s), or an error.
+// UpdateKubernetesMasterVersion updates the version of Kubernetes on the master(s),
+// or an error.
 func (mgr *ClusterManagerClient) UpdateMasterKubernetesVersion(ctx context.Context, clusterID, version string) error {
 
 	logrus.Debugf("updating master Kubernetes version of cluster ID %s to %s", clusterID, version)
@@ -305,6 +311,9 @@ func (mgr *ClusterManagerClient) UpdateMasterKubernetesVersion(ctx context.Conte
 	cl, err := mgr.GetClusterByID(ctx, clusterID)
 	if err == nil {
 		logrus.Debugf("current Kubernetes version of cluster is %s", *cl.KubernetesVersion)
+	} else {
+		logrus.Debugf("cluster ID lookup failed with error %v", err)
+		return err
 	}
 
 	cpRes, err := mgr.containerEngineClient.UpdateCluster(ctx, clReq)
@@ -324,8 +333,10 @@ func (mgr *ClusterManagerClient) UpdateMasterKubernetesVersion(ctx context.Conte
 	return nil
 }
 
-// UpdateNodepoolKubernetesVersion updates the version of Kubernetes on (new) worker that will be added to the node pool.
-// Be sure to call UpdateKubernetesMasterVersion before updating the version of node pools, or an error.
+// UpdateNodepoolKubernetesVersion updates the version of Kubernetes on (new)
+// worker that will be added to the node pool. Be sure to call
+// UpdateKubernetesMasterVersion before updating the version of node pools, or
+// an error.
 func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Context, nodePoolID, version string) error {
 
 	logrus.Debugf("updating node pool Kubernetes version of node pool ID %s to %s", nodePoolID, version)
@@ -341,6 +352,9 @@ func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Con
 	np, err := mgr.GetNodePoolByID(ctx, nodePoolID)
 	if err == nil {
 		logrus.Debugf("current Kubernetes version of node pool is %s", *np.KubernetesVersion)
+	} else {
+		logrus.Debugf("node pool lookup failed with error %v", err)
+		return err
 	}
 
 	// New nodes added to this node pool will run the updated version
@@ -354,7 +368,8 @@ func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Con
 	return nil
 }
 
-// GetVcnIDByClusterID returns the VCN ID for the existing cluster with the specified Id, or an error.
+// GetVcnIDByClusterID returns the VCN ID for the existing cluster with the
+// specified Id, or an error.
 func (mgr *ClusterManagerClient) GetVcnIDByClusterID(ctx context.Context, clusterID string) (string, error) {
 	logrus.Debugf("getting cluster VCN with cluster ID %s", clusterID)
 
@@ -366,7 +381,8 @@ func (mgr *ClusterManagerClient) GetVcnIDByClusterID(ctx context.Context, cluste
 	return *cluster.VcnId, nil
 }
 
-// GetVcnIDByName returns the VCN ID of the VCN with the specified name in the specified compartment or an error if it is not found.
+// GetVcnIDByName returns the VCN ID of the VCN with the specified name in the
+// specified compartment or an error if it is not found.
 func (mgr *ClusterManagerClient) GetVcnIDByName(ctx context.Context, compartmentID, displayName string) (string, error) {
 	vcn, err := mgr.GetVcnByName(ctx, compartmentID, displayName)
 	if vcn.Id == nil {
@@ -405,7 +421,8 @@ func (mgr *ClusterManagerClient) GetVcnByName(ctx context.Context, compartmentID
 	return vcn, fmt.Errorf("%s not found", displayName)
 }
 
-// GetSubnetIDByName returns the subnet ID of the subnet with the specified name in the specified VCN and compartment, or an error if it is not found.
+// GetSubnetIDByName returns the subnet ID of the subnet with the specified name
+// in the specified VCN and compartment, or an error if it is not found.
 func (mgr *ClusterManagerClient) GetSubnetIDByName(ctx context.Context, compartmentID, vcnID, displayName string) (string, error) {
 	subnet, err := mgr.GetSubnetByName(ctx, compartmentID, vcnID, displayName)
 	if subnet.Id == nil {
@@ -415,7 +432,8 @@ func (mgr *ClusterManagerClient) GetSubnetIDByName(ctx context.Context, compartm
 	return *subnet.Id, err
 }
 
-// GetSubnetIDByName returns the subnet with the specified name in the specified VCN and compartment, or an error if it is not found.
+// GetSubnetIDByName returns the subnet with the specified name in the specified
+// VCN and compartment, or an error if it is not found.
 func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmentID, vcnID, displayName string) (core.Subnet, error) {
 	logrus.Debugf("getting subnet with name %s", displayName)
 
@@ -446,7 +464,8 @@ func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmen
 	return subnet, fmt.Errorf("%s not found", displayName)
 }
 
-// ListSubnetIdsInVcn returns the subnet IDs of any and all subnets in the specified VCN.
+// ListSubnetIdsInVcn returns the subnet IDs of any and all subnets in the
+// specified VCN.
 func (mgr *ClusterManagerClient) ListSubnetIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
 	logrus.Debugf("list subnet Ids called")
 
@@ -475,7 +494,8 @@ func (mgr *ClusterManagerClient) ListSubnetIdsInVcn(ctx context.Context, compart
 	return ids, nil
 }
 
-// ListRouteTableIdsInVcn returns the route table IDs of any and all route tables in the specified VCN.
+// ListRouteTableIdsInVcn returns the route table IDs of any and all route tables
+// in the specified VCN.
 func (mgr *ClusterManagerClient) ListRouteTableIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
 	logrus.Debugf("list route table Ids called")
 
@@ -504,7 +524,8 @@ func (mgr *ClusterManagerClient) ListRouteTableIdsInVcn(ctx context.Context, com
 	return ids, nil
 }
 
-// ListInternetGatewayIdsInVcn returns the route table IDs of any and all Internet gateways in the specified VCN.
+// ListInternetGatewayIdsInVcn returns the route table IDs of any and all
+// Internet gateways in the specified VCN.
 func (mgr *ClusterManagerClient) ListInternetGatewayIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
 	logrus.Debugf("list Internet gateway Ids called")
 
@@ -533,7 +554,8 @@ func (mgr *ClusterManagerClient) ListInternetGatewayIdsInVcn(ctx context.Context
 	return ids, nil
 }
 
-// ListNatGatewayIdsInVcn returns the NAT gateway IDs of any and all NAT gateways in the specified VCN.
+// ListNatGatewayIdsInVcn returns the NAT gateway IDs of any and all NAT
+// gateways in the specified VCN.
 func (mgr *ClusterManagerClient) ListNatGatewayIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
 	logrus.Debugf("list NAT gateway Ids called")
 
@@ -562,7 +584,8 @@ func (mgr *ClusterManagerClient) ListNatGatewayIdsInVcn(ctx context.Context, com
 	return ids, nil
 }
 
-// ListSecurityListIdsInVcn returns the security list IDs of any and all security lists in the specified VCN.
+// ListSecurityListIdsInVcn returns the security list IDs of any and all security
+// lists in the specified VCN.
 func (mgr *ClusterManagerClient) ListSecurityListIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
 	logrus.Debugf("list security list Ids called")
 
@@ -591,7 +614,8 @@ func (mgr *ClusterManagerClient) ListSecurityListIdsInVcn(ctx context.Context, c
 	return ids, nil
 }
 
-// ListNodepoolIdsInCluster returns the node pool IDs of any and all node pools in the specified cluster.
+// ListNodepoolIdsInCluster returns the node pool IDs of any and all node pools
+// in the specified cluster.
 func (mgr *ClusterManagerClient) ListNodepoolIdsInCluster(ctx context.Context, compartmentID, clusterID string) ([]string, error) {
 	logrus.Debugf("list node pool ID(s) for cluster ID %s", clusterID)
 
@@ -652,7 +676,7 @@ func (mgr *ClusterManagerClient) DeleteNodePool(ctx context.Context, nodePoolID 
 	return nil
 }
 
-// DeleteCluster deletes the cluster with the specified ID, or it returns an error.
+// DeleteCluster deletes the cluster with the specified ID, or an error.
 func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID string) error {
 	logrus.Debugf("deleting cluster with cluster ID %s", clusterID)
 
@@ -680,7 +704,8 @@ func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID st
 	return nil
 }
 
-// DeleteVCN deletes the VCN and its associated resources (subnets, attached gateways, etc.) with the specified ID, or it returns an error.
+// DeleteVCN deletes the VCN and its associated resources (subnets, attached
+// gateways, etc.) with the specified ID, or an error.
 func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) error {
 
 	logrus.Debugf("deleting VCN with VCN ID %s", vcnID)
@@ -698,7 +723,8 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 		return err
 	}
 
-	// The VCN must be completely empty (meaning no subnets, attached gateways, or security lists)
+	// The VCN must be completely empty (meaning no subnets, attached gateways,
+	// or security lists)
 
 	// Delete Route Rules
 	listRouteTblsReq := core.ListRouteTablesRequest{}
@@ -831,7 +857,8 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	return nil
 }
 
-// GetKubeconfigByClusterID is a wrapper for the CreateKubeconfig operation that that handles errors and unmarshaling, or it returns an error.
+// GetKubeconfigByClusterID is a wrapper for the CreateKubeconfig operation that
+// that handles errors and unmarshaling, or an error.
 func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, clusterID, region string) (store.KubeConfig, string, error) {
 	logrus.Debugf("getting KUBECONFIG with cluster ID %s", clusterID)
 
@@ -862,7 +889,8 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 	}
 
 	if len(kubeconfig.Users) > 0 && kubeconfig.Users[0].User.Token == "" {
-		// Generate the token here rather than using exec credentials, which is not supported by rancher's KubeConfig and ClusterInfo types.
+		// Generate the token here rather than using exec credentials, which is
+		// not supported by rancher's KubeConfig and ClusterInfo types.
 		logrus.Info("generating a /v2 (exec based) kubeconfig token")
 		requestSigner := common.RequestSigner(mgr.configuration, common.DefaultGenericHeaders(), common.DefaultBodyHeaders())
 		interceptor := func(r *http.Request) error {
@@ -879,7 +907,8 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 	return *kubeconfig, string(content), nil
 }
 
-// CreateSubnets creates (public or private) node subnets in each availability domain, or it returns an error.
+// CreateSubnets creates (public or private) node subnets in each availability
+// domain, or an error.
 // TODO stop passing in state
 func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 
@@ -956,7 +985,8 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 	return subnetIds, nil
 }
 
-// CreateServiceSubnets creates the (public) service subnets (i.e. load balancer subnets), or it returns an error.
+// CreateServiceSubnets creates the (public) service subnets (i.e. load balancer
+// subnets), or an error.
 func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 	logrus.Debugf("creating service / LB subnet(s) in VCN ID %s", vcnID)
 
@@ -1017,7 +1047,7 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 	return subnetIds, nil
 }
 
-// CreateBastionSubnets creates the (public) bastion subnet(s), or it returns an error.
+// CreateBastionSubnets creates the (public) bastion subnet(s), or an error.
 func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 	logrus.Debugf("creating bastion subnet(s) in VCN ID %s", vcnID)
 
@@ -1055,7 +1085,7 @@ func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state
 	return subnetIds, nil
 }
 
-// CreateSubnetWithDetails creates a new subnet in the specified VCN, or it returns an error.
+// CreateSubnetWithDetails creates a new subnet in the specified VCN, or an error.
 // TODO stop passing in state
 func (mgr *ClusterManagerClient) CreateSubnetWithDetails(displayName *string, cidrBlock *string, dnsLabel *string, availableDomain *string, vcnID *string, routeTableID *string, isPrivate bool, securityListIds []string, state *State) (core.Subnet, error) {
 
@@ -1105,9 +1135,9 @@ func (mgr *ClusterManagerClient) CreateSubnetWithDetails(displayName *string, ci
 	return response.Subnet, nil
 }
 
-// CreateVCNAndNetworkResources creates a new Virtual Cloud Network and required resources including security lists,
-// Internet Gateway, default route rule, etc., or it returns an error.
-// TODO stop passing in state
+// CreateVCNAndNetworkResources creates a new Virtual Cloud Network and
+// required resources including security lists, Internet Gateway, default route
+// rule, etc., or an error.
 func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (string, []string, []string, error) {
 
 	logrus.Debugf("create virtual cloud network called.")
@@ -1160,7 +1190,8 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 
 	subnetRouteID := routeTablesResp.Items[0].Id
 
-	// Add a route rule in the route table that directs internet-bound traffic to the internet gateway created above.
+	// Add a route rule in the route table that directs internet-bound traffic
+	// to the internet gateway created above.
 	updateRouteTableReq := core.UpdateRouteTableRequest{}
 	updateRouteTableReq.RtId = routeTablesResp.Items[0].Id
 	updateRouteTableReq.DisplayName = routeTablesResp.Items[0].DisplayName
@@ -1173,7 +1204,8 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 
 	if state.PrivateNodes {
 
-		// Private nodes require private subnets, a NAT gateway, and a Security list for the bastion instance.
+		// Private nodes require private subnets, a NAT gateway, and a Security
+		// list for the bastion instance.
 
 		// Prepare the NAT gateway and route rule for private clusters
 		natGatewayReq := core.CreateNatGatewayRequest{
@@ -1195,7 +1227,8 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 		}
 
 		createRouteTableReq := core.CreateRouteTableRequest{}
-		// Add a route rule in the route table that directs internet-bound traffic to the NAT gateway created above.
+		// Add a route rule in the route table that directs internet-bound
+		// traffic to the NAT gateway created above.
 		createRouteTableReq.DisplayName = common.String("nat-gateway_route")
 		createRouteTableReq.RouteRules = append(natRules)
 		createRouteTableReq.CompartmentId = &state.CompartmentID
@@ -1306,7 +1339,8 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 		})
 	}
 
-	// TODO consider enabling 0.0.0.0/0 ICMP for nodes to receive Path MTU Discovery fragmentation messages.
+	// TODO consider enabling 0.0.0.0/0 ICMP for nodes to receive Path MTU
+	//  Discovery fragmentation messages.
 	// TODO we could also create a service gateway and corresponding route rule.
 
 	nodeSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, nodeSecList)
@@ -1370,7 +1404,8 @@ func getResourceID(resources []containerengine.WorkRequestResource, actionType c
 
 // wait until work request finish
 func waitUntilWorkRequestComplete(client containerengine.ContainerEngineClient, workRequestID *string) (containerengine.GetWorkRequestResponse, error) {
-	// TODO - this function seems to be taking too long and not returning as soon as the job appears to be complete.
+	// TODO - this function seems to be taking too long and not returning as
+	//  soon as the job appears to be complete.
 
 	if workRequestID == nil || len(*workRequestID) == 0 {
 		return containerengine.GetWorkRequestResponse{}, fmt.Errorf("a valid workRequestID is required")
