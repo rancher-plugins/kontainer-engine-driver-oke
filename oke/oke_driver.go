@@ -19,20 +19,23 @@ package oke
 *  The driver implements interface required by Rancher (Create, Update, Remove, Get*, etc).
  */
 
-// TODO add some integration tests
-// TODO support private subnets
-
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-
 	"github.com/oracle/oci-go-sdk/common"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
 	"github.com/rancher/kontainer-engine/types"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
+	"gopkg.in/yaml.v2"
+	"io/ioutil"
+	"k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"os"
 )
 
 const (
@@ -53,8 +56,6 @@ type State struct {
 	// Should the Helm server (Tiller) be enabled
 	EnableTiller bool
 
-	// TODO add support for worker nodes in private subnets
-	// TODO currently unused
 	PrivateNodes bool
 
 	// The name of the cluster (and default node pool)
@@ -81,7 +82,6 @@ type State struct {
 	Region string
 
 	// The passphrase for the private key
-	// TODO currently unused
 	PrivateKeyPassphrase string
 
 	// The description of the cluster
@@ -634,11 +634,29 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 	if len(kubeConfig.Clusters) > 0 {
 		info.RootCaCertificate = kubeConfig.Clusters[0].Cluster.CertificateAuthorityData
 	}
+
+	// Use as a temporary token while we generate a service account.
 	if len(kubeConfig.Users) > 0 {
 		if kubeConfig.Users[0].User.Token != "" {
 			info.ServiceAccountToken = kubeConfig.Users[0].User.Token
 		}
-		// TODO handle info.ExecCredential once it is supported
+		// TODO handle info.ExecCredential when it is supported by Rancher
+		// https://github.com/rancher/rancher/issues/24135
+	}
+
+	kubeConfigStr, err := yaml.Marshal(&kubeConfig)
+	if err != nil {
+		return nil, fmt.Errorf("error marshaling kubeconfig: %v", err)
+	}
+
+	clientSet, err := getClientsetFromKubeconfig(kubeConfigStr)
+	if err != nil {
+		return nil, fmt.Errorf("error creating clientset from kubeconfig: %v", err)
+	}
+
+	info.ServiceAccountToken, err = generateServiceAccountToken(clientSet)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not generate service account token from OKE kubeconfig")
 	}
 
 	return info, nil
@@ -880,4 +898,75 @@ func constructClusterManagerClient(ctx context.Context, state State) (ClusterMan
 // from a string array.
 func remove(slice []string, s int) []string {
 	return append(slice[:s], slice[s+1:]...)
+}
+
+func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error) {
+
+	tmpFile, err := ioutil.TempFile("/tmp", "kubeconfig")
+	err = ioutil.WriteFile(tmpFile.Name(), kubeconfig, 0640)
+	defer os.Remove(tmpFile.Name())
+	if err != nil {
+		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+	}
+
+	cfg, err := clientcmd.BuildConfigFromFlags("", tmpFile.Name())
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+	}
+
+	return clientset, nil
+}
+
+// GenerateServiceAccountToken generate a serviceAccountToken for clusterAdmin given a clientset
+func generateServiceAccountToken(clientset kubernetes.Interface) (string, error) {
+
+	token := ""
+	namespace := "default"
+	name := "kontainer-engine"
+
+	// Create new service account, if it does not exist already
+
+	serviceAccount := &v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name}}
+
+	_, _ = clientset.CoreV1().ServiceAccounts(namespace).Create(serviceAccount)
+
+	// Look up service account
+	serviceAccount, err := clientset.CoreV1().ServiceAccounts(namespace).Get(serviceAccount.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", err
+	}
+
+	if len(serviceAccount.Secrets) > 0 {
+		secret := serviceAccount.Secrets[0]
+		secretObj, err := clientset.CoreV1().Secrets(namespace).Get(secret.Name, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("error getting secret: %v", err)
+		}
+		if byteToken, ok := secretObj.Data["token"]; ok {
+			token = string(byteToken)
+		}
+	}
+
+	// Create new cluster-role-bindings, if it does not exist already
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.ServiceAccountKind, APIGroup: "", Name: name, Namespace: namespace}},
+		RoleRef: rbacv1.RoleRef{
+			Kind: "ClusterRole",
+			Name: "cluster-admin",
+		},
+	}
+
+	_, _ = clientset.RbacV1().ClusterRoleBindings().Create(clusterRoleBinding)
+
+	// Look up cluster role binding
+	clusterRoleBinding, err = clientset.RbacV1().ClusterRoleBindings().Get(clusterRoleBinding.Name, metav1.GetOptions{})
+	if err != nil {
+		return "", fmt.Errorf("error getting cluster role binding: %v", err)
+	}
+
+	return token, nil
 }
