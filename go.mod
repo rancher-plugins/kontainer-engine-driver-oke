@@ -1,4 +1,4 @@
-module github.com/jlamillan/kontainer-engine-driver-oke
+module github.com/rancher-plugins/kontainer-engine-driver-oke
 
 go 1.12
 
