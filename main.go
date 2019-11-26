@@ -21,7 +21,7 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/jlamillan/kontainer-engine-driver-oke/oke"
+	"github.com/rancher-plugins/kontainer-engine-driver-oke/oke"
 	"github.com/rancher/kontainer-engine/types"
 	"github.com/sirupsen/logrus"
 )
