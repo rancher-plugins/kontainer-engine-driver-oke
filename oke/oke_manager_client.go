@@ -60,10 +60,10 @@ const (
 // Defines / contains the OCI/OKE/Identity clients and operations.
 type ClusterManagerClient struct {
 	configuration         common.ConfigurationProvider
-	containerEngineClient containerengine.ContainerEngineClient
-	computeClient         core.ComputeClient
-	virtualNetworkClient  core.VirtualNetworkClient
-	identityClient        identity.IdentityClient
+	containerEngineClient ContainerEngineClientInterface
+	computeClient         ComputeClientInterface
+	virtualNetworkClient  VcnClientInterface
+	identityClient        IdentityClientInterface
 	sleepDuration         time.Duration
 	// TODO we could also include the retry settings here
 }
@@ -110,6 +110,12 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 		sleepDuration:         5,
 	}
 	return c, nil
+}
+
+func (mgr *ClusterManagerClient) sleep(duration time.Duration) {
+	if mgr.sleepDuration > 0 {
+		time.Sleep(duration)
+	}
 }
 
 // CreateCluster creates a new cluster with no initial node pool and attaches
@@ -199,7 +205,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	// wait until cluster creation work request complete
 	logrus.Infof("[oraclecontainerengine] Waiting for cluster [%s] to reach Active status...", state.Name)
 	// initial delay since subsequent back-off function waits longer each time the retry fails
-	time.Sleep(time.Minute * 3)
+	mgr.sleep(time.Minute * 3)
 	workReqRespCluster, err := waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, clusterResp.OpcWorkRequestId)
 	if err != nil {
 		logrus.Errorf("[oraclecontainerengine] get work request for cluster creation failed with error %v", err)
@@ -385,7 +391,7 @@ func (mgr *ClusterManagerClient) CreateNodePools(ctx context.Context, state *Sta
 			// wait until cluster creation work request complete
 			logrus.Infof("[oraclecontainerengine] Waiting for node pool to be created for cluster [%s]...", state.Name)
 			// initial delay since subsequent back-off function waits longer each time the retry fails
-			time.Sleep(time.Minute * 5)
+			mgr.sleep(time.Minute * 5)
 			workReqRespNodePool, err := waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
 			if err != nil {
 				logrus.Errorf("[oraclecontainerengine] get work request for node pool creation failed with error %v", err)
@@ -413,7 +419,7 @@ func (mgr *ClusterManagerClient) CreateNodePools(ctx context.Context, state *Sta
 							doneWaiting = true
 							break
 						}
-						time.Sleep(1 * time.Minute)
+						mgr.sleep(1 * time.Minute)
 					}
 					if doneWaiting {
 						break
@@ -503,7 +509,7 @@ func (mgr *ClusterManagerClient) createNodePoolPlacements(ctx context.Context, s
 
 }
 
-func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (string, error) {
+func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c ComputeClientInterface, compartment, shape, displayName string) (string, error) {
 	logrus.Tracef("[oraclecontainerengine] getImageID(...) called")
 	request := containerengine.GetNodePoolOptionsRequest{
 		CompartmentId:    common.String(compartment),
@@ -563,7 +569,7 @@ func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID s
 		logrus.Errorf("[oraclecontainerengine] scale node pool request failed with error %v", err)
 		return err
 	}
-	time.Sleep(time.Second * 30)
+	mgr.sleep(time.Second * 30)
 	logrus.Info("[oraclecontainerengine] Waiting for node pool update (scale) to complete...")
 	_, err = waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, resp.OpcWorkRequestId)
 	if err != nil {
@@ -647,7 +653,7 @@ func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Con
 		logrus.Errorf("[oraclecontainerengine] upgrade Kubernetes version on node pool failed with error %v", err)
 		return err
 	}
-	time.Sleep(time.Second * 30)
+	mgr.sleep(time.Second * 30)
 	logrus.Info("[oraclecontainerengine] Waiting for node pool update (upgrade) to complete...")
 	_, err = waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, resp.OpcWorkRequestId)
 	if err != nil {
@@ -837,7 +843,7 @@ func (mgr *ClusterManagerClient) ReconcileNodePool(ctx context.Context, nodePool
 			logrus.Errorf("[oraclecontainerengine] OKE node pool reconciliation failed with error %v", err)
 			return err
 		}
-		time.Sleep(time.Second * 30)
+		mgr.sleep(time.Second * 30)
 		logrus.Info("[oraclecontainerengine] Waiting for node pool update (sync) to complete...")
 		_, err = waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, resp.OpcWorkRequestId)
 		if err != nil {
@@ -924,7 +930,7 @@ func (mgr *ClusterManagerClient) ReconcileCluster(ctx context.Context, clusterID
 				logrus.Errorf("[oraclecontainerengine] OKE cluster endpoint reconciliation failed with error %v", err)
 				return err
 			}
-			time.Sleep(3 * 60 * time.Second)
+			mgr.sleep(3 * 60 * time.Second)
 		}
 
 		resp, err := mgr.containerEngineClient.UpdateCluster(ctx, diffs)
@@ -932,7 +938,7 @@ func (mgr *ClusterManagerClient) ReconcileCluster(ctx context.Context, clusterID
 			logrus.Errorf("[oraclecontainerengine] OKE cluster reconciliation failed with error %v", err)
 			return err
 		}
-		time.Sleep(time.Second * 30)
+		mgr.sleep(time.Second * 30)
 		logrus.Info("[oraclecontainerengine] Waiting for cluster update (sync) to complete...")
 		_, err = waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, resp.OpcWorkRequestId)
 		if err != nil {
@@ -1282,7 +1288,7 @@ func (mgr *ClusterManagerClient) DeleteNodePool(ctx context.Context, nodePoolID 
 	// wait until node pool deletion work request complete
 	logrus.Infof("[oraclecontainerengine] Waiting for node pool to be deleted...")
 	// TODO better to poll instead of sleep
-	time.Sleep(mgr.sleepDuration * time.Second)
+	mgr.sleep(mgr.sleepDuration * time.Second)
 	_, err = waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, deleteNodePoolResp.OpcWorkRequestId)
 	if err != nil {
 		logrus.Errorf("[oraclecontainerengine] get work request for node pool deletion failed with error %v", err)
@@ -1314,7 +1320,7 @@ func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID st
 	// wait until cluster deletion work request complete
 	logrus.Infof("[oraclecontainerengine] Waiting for cluster [%s] to be deleted...", clusterID)
 	// initial delay since subsequent back-off function waits longer each time the retry fails
-	time.Sleep(time.Minute * 3)
+	mgr.sleep(time.Minute * 3)
 	logrus.Info("[oraclecontainerengine] Waiting for cluster deletion to complete...")
 	_, err = waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, deleteClusterResp.OpcWorkRequestId)
 	if err != nil {
@@ -1411,7 +1417,7 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string, cl
 		}
 	}
 	// TODO better to poll instead of sleep
-	time.Sleep(mgr.sleepDuration * time.Second)
+	mgr.sleep(mgr.sleepDuration * time.Second)
 
 	// Delete all security lists from VCN
 	listSecurityListsReq := core.ListSecurityListsRequest{}
@@ -1560,7 +1566,7 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 		logrus.Debugf("[oraclecontainerengine] creating private regional node subnet in VCN ID %s", vcnID)
 	}
 
-	var subnetIds = []string{}
+	var subnetIds []string
 	if state == nil {
 		logrus.Error("[oraclecontainerengine] valid state is required")
 		return subnetIds, fmt.Errorf("[oraclecontainerengine] valid state is required")
@@ -1663,7 +1669,7 @@ func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state
 	logrus.Tracef("[oraclecontainerengine] CreateBastionSubnets(...) called")
 	logrus.Debugf("[oraclecontainerengine] creating bastion subnet(s) in VCN ID %s", vcnID)
 
-	var subnetIds = []string{}
+	var subnetIds []string
 	if state == nil {
 		return subnetIds, fmt.Errorf("[oraclecontainerengine] valid state is required")
 	}
@@ -1773,7 +1779,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 		return "", "", nil, nil, err
 	}
 	// TODO better to poll instead of sleep
-	time.Sleep(mgr.sleepDuration * time.Second)
+	mgr.sleep(mgr.sleepDuration * time.Second)
 
 	var trueVar = true
 	// Create an internet gateway
@@ -2234,7 +2240,7 @@ func getContainerEngineResourceID(resources []containerengine.WorkRequestResourc
 }
 
 // wait until container engine work request finish
-func waitUntilContainerEngineWorkRequestComplete(client containerengine.ContainerEngineClient, workRequestID *string) (containerengine.GetWorkRequestResponse, error) {
+func waitUntilContainerEngineWorkRequestComplete(client ContainerEngineClientInterface, workRequestID *string) (containerengine.GetWorkRequestResponse, error) {
 	// TODO - this function seems to be taking too long and not returning as
 	//  soon as the job appears to be complete.
 	logrus.Tracef("[oraclecontainerengine] waitUntilContainerEngineWorkRequestComplete(...) called")
@@ -2288,7 +2294,7 @@ func (mgr *ClusterManagerClient) numADs(ctx context.Context, compartmentID strin
 	return len(ads.Items)
 }
 
-func getDefaultKubernetesVersion(client containerengine.ContainerEngineClient) (*string, error) {
+func getDefaultKubernetesVersion(client ContainerEngineClientInterface) (*string, error) {
 	logrus.Tracef("[oraclecontainerengine] getDefaultKubernetesVersion(...) called")
 	getClusterOptionsReq := containerengine.GetClusterOptionsRequest{
 		ClusterOptionId: common.String("all"),
