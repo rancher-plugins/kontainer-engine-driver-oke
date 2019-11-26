@@ -903,9 +903,8 @@ func remove(slice []string, s int) []string {
 func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error) {
 
 	tmpFile, err := ioutil.TempFile("/tmp", "kubeconfig")
-	err = ioutil.WriteFile(tmpFile.Name(), kubeconfig, 0640)
 	defer os.Remove(tmpFile.Name())
-	if err != nil {
+	if err := ioutil.WriteFile(tmpFile.Name(), kubeconfig, 0640); err != nil {
 		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
 	}
 
