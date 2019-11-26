@@ -44,7 +44,7 @@ binary-build:
 #
 .PHONY: unit-test
 unit-test: go-install
-	go test -v ./oke
+	GO111MODULE=on go test -v ./oke
 
 .PHONY: integ-test
 integ-test: go-install

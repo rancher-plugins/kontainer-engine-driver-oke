@@ -59,9 +59,9 @@ const (
 // Defines / contains the OCI/OKE/Identity clients and operations.
 type ClusterManagerClient struct {
 	configuration         common.ConfigurationProvider
-	containerEngineClient containerengine.ContainerEngineClient
-	virtualNetworkClient  core.VirtualNetworkClient
-	identityClient        identity.IdentityClient
+	containerEngineClient ContainerEngineClientInterface
+	virtualNetworkClient  VcnClientInterface
+	identityClient        IdentityClientInterface
 	sleepDuration         time.Duration
 	// TODO we could also include the retry settings here
 }
@@ -918,7 +918,7 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 		logrus.Debugf("creating node subnet(s) in VCN ID %s", vcnID)
 	}
 
-	var subnetIds = []string{}
+	var subnetIds []string
 	if state == nil {
 		return subnetIds, fmt.Errorf("valid state is required")
 	}
@@ -990,7 +990,7 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 	logrus.Debugf("creating service / LB subnet(s) in VCN ID %s", vcnID)
 
-	var subnetIds = []string{}
+	var subnetIds []string
 	if state == nil {
 		return subnetIds, fmt.Errorf("valid state is required")
 	}
@@ -1051,7 +1051,7 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 	logrus.Debugf("creating bastion subnet(s) in VCN ID %s", vcnID)
 
-	var subnetIds = []string{}
+	var subnetIds []string
 	if state == nil {
 		return subnetIds, fmt.Errorf("valid state is required")
 	}
@@ -1403,7 +1403,7 @@ func getResourceID(resources []containerengine.WorkRequestResource, actionType c
 }
 
 // wait until work request finish
-func waitUntilWorkRequestComplete(client containerengine.ContainerEngineClient, workRequestID *string) (containerengine.GetWorkRequestResponse, error) {
+func waitUntilWorkRequestComplete(client ContainerEngineClientInterface, workRequestID *string) (containerengine.GetWorkRequestResponse, error) {
 	// TODO - this function seems to be taking too long and not returning as
 	//  soon as the job appears to be complete.
 
@@ -1429,7 +1429,7 @@ func waitUntilWorkRequestComplete(client containerengine.ContainerEngineClient, 
 	return getResp, nil
 }
 
-func getDefaultKubernetesVersion(client containerengine.ContainerEngineClient) (*string, error) {
+func getDefaultKubernetesVersion(client ContainerEngineClientInterface) (*string, error) {
 
 	getClusterOptionsReq := containerengine.GetClusterOptionsRequest{
 		ClusterOptionId: common.String("all"),

@@ -5,11 +5,13 @@ go 1.12
 require (
 	github.com/gogo/protobuf v1.3.0 // indirect
 	github.com/oracle/oci-go-sdk v7.1.0+incompatible
+	github.com/pborman/uuid v1.2.0 // indirect
 	github.com/pkg/errors v0.8.1
 	github.com/rancher/kontainer-engine v0.0.0-20190711161432-b98bad2201bb
 	github.com/rancher/rke v0.2.8 // indirect
 	github.com/rancher/types v0.0.0-20190916163052-4cf2c20529fd // indirect
 	github.com/sirupsen/logrus v1.4.2
+	github.com/stretchr/testify v1.3.0
 	github.com/urfave/cli v1.21.0 // indirect
 	golang.org/x/crypto v0.0.0-20190829043050-9756ffdc2472 // indirect
 	golang.org/x/net v0.0.0-20190812203447-cdfb69ac37fc
