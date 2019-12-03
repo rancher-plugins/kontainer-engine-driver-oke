@@ -1358,6 +1358,11 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 		Max: common.Int(443),
 		Min: common.Int(443),
 	}
+	// Allow incoming traffic to the Istio ingress gateway port
+	istioGatewayPort := core.PortRange{
+		Max: common.Int(15443),
+		Min: common.Int(15443),
+	}
 	svcSecList := core.CreateSecurityListRequest{
 		CreateSecurityListDetails: core.CreateSecurityListDetails{
 			CompartmentId:        &state.CompartmentID,
@@ -1378,6 +1383,13 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 		Source:   common.String("0.0.0.0/0"),
 		TcpOptions: &core.TcpOptions{
 			DestinationPortRange: &httpsPortRange,
+		},
+	})
+	svcSecList.IngressSecurityRules = append(svcSecList.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol: common.String("6"), // TCP
+		Source:   common.String("0.0.0.0/0"),
+		TcpOptions: &core.TcpOptions{
+			DestinationPortRange: &istioGatewayPort,
 		},
 	})
 
