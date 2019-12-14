@@ -40,7 +40,6 @@ import (
 
 const (
 	defaultNumNodes            = 0
-	defaultNumNodeSubnets      = 3
 	defaultVCNNamePrefix       = "oke-"
 	defaultServiceSubnetPrefix = "oke-"
 )
@@ -120,7 +119,7 @@ type NetworkConfiguration struct {
 	// Optional pre-existing load balancer subnets to host load balancers for services
 	ServiceLBSubnet1Name string
 	ServiceLBSubnet2Name string
-	// The number of subnets (each are created in different availability domains)
+	// The number of AD specific subnets (each are created in different availability domains)
 	QuantityOfSubnets int64
 }
 
@@ -441,9 +440,8 @@ func (s *State) validate() error {
 		return fmt.Errorf(`"node-image " is required`)
 	} else if s.NodePool.NodeShape == "" {
 		return fmt.Errorf(`"node-shape " is required`)
-	} else if s.Network.VCNName != "" && (s.Network.ServiceLBSubnet1Name == "" ||
-		s.Network.ServiceLBSubnet2Name == "") {
-		return fmt.Errorf(`"vcn-name", "load-balancer-subnet-name-1", and "load-balancer-subnet-name-2" must all be set together"`)
+	} else if s.Network.VCNName != "" && (s.Network.ServiceLBSubnet1Name == "") {
+		return fmt.Errorf(`"vcn-name" and "load-balancer-subnet-name-1" must be set together"`)
 	}
 
 	return nil
@@ -480,11 +478,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	if state.Network.VCNName == "" {
 		// Create a new Virtual Cloud Network with the default number of subnets
 		state.Network.VCNName = defaultVCNNamePrefix + state.Name
-		state.Network.ServiceLBSubnet1Name = defaultServiceSubnetPrefix + state.Name + "-1"
-		state.Network.ServiceLBSubnet2Name = defaultServiceSubnetPrefix + state.Name + "-2"
-		if state.Network.QuantityOfSubnets == 0 {
-			state.Network.QuantityOfSubnets = defaultNumNodeSubnets
-		}
+		state.Network.ServiceLBSubnet1Name = defaultServiceSubnetPrefix + state.Name
 
 		logrus.Infof("Creating a new VCN and required network resources for OKE cluster %s", state.Name)
 		vcnID, serviceSubnetIDs, nodeSubnetIds, err = oke.CreateVCNAndNetworkResources(&state)
@@ -510,12 +504,14 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		}
 		serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet1Id)
 
-		serviceSubnet2Id, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ServiceLBSubnet2Name)
-		if err != nil {
-			logrus.Debugf("error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet2Name, err)
-			return clusterInfo, err
+		if state.Network.ServiceLBSubnet2Name != "" {
+			serviceSubnet2Id, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ServiceLBSubnet2Name)
+			if err != nil {
+				logrus.Debugf("error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet2Name, err)
+				return clusterInfo, err
+			}
+			serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet2Id)
 		}
-		serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet2Id)
 
 		// First, get all the subnet Ids in the VCN, then remove the service subnets which should leave the node subnets
 		nodeSubnetIds, _ = oke.ListSubnetIdsInVcn(ctx, state.Network.VcnCompartmentID, vcnID)
@@ -527,10 +523,11 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 			}
 		}
 
-		// When using an existing VCN, we require at least three subnets for node pool.
-		if len(nodeSubnetIds) < 3 {
-			return clusterInfo, fmt.Errorf("VCN must have at least 3 node subnets in different availability domains for node pool")
+		// When using an existing VCN, we require at least one subnet (preferably regional) for node pool.
+		if len(nodeSubnetIds) < 1 {
+			return clusterInfo, fmt.Errorf("VCN must have at least 1 node subnet for node pool")
 		}
+
 		state.Network.QuantityOfSubnets = int64(len(nodeSubnetIds))
 	}
 

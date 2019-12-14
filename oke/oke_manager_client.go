@@ -41,19 +41,13 @@ import (
 
 const (
 	// TODO VCN block only needs to be large enough for the subnets below
-	vcnCIDRBlock       = "10.0.0.0/16"
-	node1CIDRBlock     = "10.0.10.0/24"
-	node2CIDRBlock     = "10.0.11.0/24"
-	node3CIDRBlock     = "10.0.12.0/24"
-	bastionCIDRBlock   = "10.0.16.0/24"
-	service1CIDRBlock  = "10.0.1.0/24"
-	service2CIDRBlock  = "10.0.2.0/24"
-	node1SubnetName    = "nodedns1"
-	node2SubnetName    = "nodedns2"
-	node3SubnetName    = "nodedns3"
-	service1SubnetName = "svcdns1"
-	service2SubnetName = "svcdns2"
-	bastionSubnetName  = "bastion"
+	vcnCIDRBlock      = "10.0.0.0/16"
+	nodeCIDRBlock     = "10.0.10.0/24"
+	bastionCIDRBlock  = "10.0.16.0/24"
+	serviceCIDRBlock  = "10.0.20.0/24"
+	nodeSubnetName    = "nodedns"
+	serviceSubnetName = "svcdns"
+	bastionSubnetName = "bastion"
 )
 
 // Defines / contains the OCI/OKE/Identity clients and operations.
@@ -219,6 +213,13 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		state.KubernetesVersion = *kubernetesVersion
 	}
 
+	req := identity.ListAvailabilityDomainsRequest{}
+	req.CompartmentId = &state.CompartmentID
+	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
+	if err != nil {
+		return err
+	}
+
 	// Create a node pool for the cluster
 	npReq := containerengine.CreateNodePoolRequest{}
 	npReq.Name = common.String(state.Name + "-1")
@@ -227,16 +228,33 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	npReq.KubernetesVersion = &state.KubernetesVersion
 	npReq.NodeImageName = common.String(state.NodePool.NodeImageName)
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
-	// Node-pool subnets used for node instances in the node pool.
+	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.
-	npReq.SubnetIds = nodeSubnetIds
 	npReq.InitialNodeLabels = []containerengine.KeyValue{{Key: common.String("driver"), Value: common.String("oraclekubernetesengine")}}
 	if state.NodePool.NodePublicSSHKeyContents != "" {
 		npReq.SshPublicKey = common.String(state.NodePool.NodePublicSSHKeyContents)
 	}
+	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
+		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(ads.Items)),
+		Size:             common.Int(len(ads.Items)),
+	}
 
-	tmp := int(state.NodePool.QuantityPerSubnet)
-	npReq.QuantityPerSubnet = &tmp
+	// Match up subnet(s) to availability domains
+	for i := 0; i < len(ads.Items); i++ {
+		nextSubnetId := ""
+		if len(nodeSubnetIds) == 1 {
+			// use a single regional subnet (default)
+			nextSubnetId = nodeSubnetIds[0]
+		} else {
+			// use AD specific subnets (possibly coming from an existing VCN)
+			nextSubnetId = nodeSubnetIds[i]
+		}
+		npReq.NodeConfigDetails.PlacementConfigs = append(npReq.NodeConfigDetails.PlacementConfigs,
+			containerengine.NodePoolPlacementConfigDetails{
+				AvailabilityDomain: ads.Items[i].Name,
+				SubnetId:           &nextSubnetId,
+			})
+	}
 
 	createNodePoolResp, err := mgr.containerEngineClient.CreateNodePool(ctx, npReq)
 	if err != nil {
@@ -907,15 +925,14 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 	return *kubeconfig, string(content), nil
 }
 
-// CreateSubnets creates (public or private) node subnets in each availability
-// domain, or an error.
+// CreateNodeSubnets creates (public or private) regional node subnet, or an error.
 // TODO stop passing in state
 func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 
 	if isPrivate {
-		logrus.Debugf("creating node subnet(s) in VCN ID %s", vcnID)
+		logrus.Debugf("creating public regional node subnet in VCN ID %s", vcnID)
 	} else {
-		logrus.Debugf("creating node subnet(s) in VCN ID %s", vcnID)
+		logrus.Debugf("creating private regional node subnet in VCN ID %s", vcnID)
 	}
 
 	var subnetIds = []string{}
@@ -926,27 +943,14 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 	// create a subnet in different availability domain
 	req := identity.ListAvailabilityDomainsRequest{}
 	req.CompartmentId = &state.CompartmentID
-	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
-	if err != nil {
-		return subnetIds, err
-	}
 
-	if len(ads.Items) < int(state.Network.QuantityOfSubnets) {
-		return subnetIds, fmt.Errorf("there are less availability domains than required subnets")
-	}
-
-	if len(ads.Items) < 3 {
-		return subnetIds, fmt.Errorf("VCN requires at least 3 node subnets")
-	}
-
-	// Create each node subnet in a different availability domain
-	nodeSubnetName := node1SubnetName
-	availableDomain := ads.Items[0].Name
+	// Create regional subnet
+	nodeSubnetName := nodeSubnetName
 	subnet1, err := mgr.CreateSubnetWithDetails(
 		common.String(nodeSubnetName),
-		common.String(node1CIDRBlock),
+		common.String(nodeCIDRBlock),
 		common.String(nodeSubnetName),
-		availableDomain,
+		nil,
 		common.String(vcnID), common.String(subnetRouteID), isPrivate, securityListIds, state)
 	if err != nil {
 		logrus.Debugf("create new node subnet failed with err %v", err)
@@ -954,39 +958,11 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 	}
 	subnetIds = append(subnetIds, *subnet1.Id)
 
-	nodeSubnetName = node2SubnetName
-	availableDomain = ads.Items[1].Name
-	subnet2, err := mgr.CreateSubnetWithDetails(
-		common.String(nodeSubnetName),
-		common.String(node2CIDRBlock),
-		common.String(nodeSubnetName),
-		availableDomain,
-		common.String(vcnID), common.String(subnetRouteID), isPrivate, securityListIds, state)
-	if err != nil {
-		logrus.Debugf("create new node subnet failed with err %v", err)
-		return subnetIds, err
-	}
-	subnetIds = append(subnetIds, *subnet2.Id)
-
-	nodeSubnetName = node3SubnetName
-	availableDomain = ads.Items[2].Name
-	subnet3, err := mgr.CreateSubnetWithDetails(
-		common.String(nodeSubnetName),
-		common.String(node3CIDRBlock),
-		common.String(nodeSubnetName),
-		availableDomain,
-		common.String(vcnID), common.String(subnetRouteID), isPrivate, securityListIds, state)
-	if err != nil {
-		logrus.Debugf("create new node subnet failed with err %v", err)
-		return subnetIds, err
-	}
-	subnetIds = append(subnetIds, *subnet3.Id)
-
 	return subnetIds, nil
 }
 
-// CreateServiceSubnets creates the (public) service subnets (i.e. load balancer
-// subnets), or an error.
+// CreateServiceSubnets creates the regional (public) service subnet (i.e. load balancer
+// subnet), or an error.
 func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 	logrus.Debugf("creating service / LB subnet(s) in VCN ID %s", vcnID)
 
@@ -995,54 +971,24 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 		return subnetIds, fmt.Errorf("valid state is required")
 	}
 
-	// create a subnet in different availability domain
-	req := identity.ListAvailabilityDomainsRequest{}
-	req.CompartmentId = &state.CompartmentID
-	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
-	if err != nil {
-		return subnetIds, err
-	}
-
-	if len(ads.Items) < 2 {
-		return subnetIds, fmt.Errorf("at least 2 availability domains are required to host service subnets")
-	}
-
-	// Create each service subnet in a different availability domain
-	availableDomain := ads.Items[1].Name
-	var svc1SubnetName = ""
+	// Create regional subnet for services
+	var svcSubnetName = ""
 	if state.Network.ServiceLBSubnet1Name == "" {
-		svc1SubnetName = service1SubnetName
+		svcSubnetName = serviceSubnetName
 	} else {
-		svc1SubnetName = state.Network.ServiceLBSubnet1Name
+		svcSubnetName = state.Network.ServiceLBSubnet1Name
 	}
-	subnet1, err := mgr.CreateSubnetWithDetails(common.String(svc1SubnetName),
-		common.String(service1CIDRBlock),
-		common.String(service1SubnetName),
-		availableDomain,
+	// Create regional subnet
+	subnet, err := mgr.CreateSubnetWithDetails(common.String(svcSubnetName),
+		common.String(serviceCIDRBlock),
+		common.String(serviceSubnetName),
+		nil,
 		common.String(vcnID), nil, isPrivate, securityListIds, state)
 	if err != nil {
 		logrus.Debugf("create new service subnet failed with err %v", err)
 		return subnetIds, err
 	}
-	subnetIds = append(subnetIds, *subnet1.Id)
-
-	availableDomain = ads.Items[2].Name
-	var svc2SubnetName = ""
-	if state.Network.ServiceLBSubnet1Name == "" {
-		svc2SubnetName = service2SubnetName
-	} else {
-		svc2SubnetName = state.Network.ServiceLBSubnet2Name
-	}
-	subnet2, err := mgr.CreateSubnetWithDetails(common.String(svc2SubnetName),
-		common.String(service2CIDRBlock),
-		common.String(service2SubnetName),
-		availableDomain,
-		common.String(vcnID), nil, isPrivate, securityListIds, state)
-	if err != nil {
-		logrus.Debugf("create new service / load balancer subnets failed with error %v", err)
-		return subnetIds, err
-	}
-	subnetIds = append(subnetIds, *subnet2.Id)
+	subnetIds = append(subnetIds, *subnet.Id)
 
 	return subnetIds, nil
 }
@@ -1068,13 +1014,12 @@ func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state
 		return subnetIds, fmt.Errorf("at least 1 availability domains are required to host the bastion subnet")
 	}
 
-	// Create each service subnet in a different availability domain
-	availableDomain := ads.Items[0].Name
-	var svc1SubnetName = bastionSubnetName
-	subnet, err := mgr.CreateSubnetWithDetails(common.String(svc1SubnetName),
+	// Create regional subnet
+	var subnetName = bastionSubnetName
+	subnet, err := mgr.CreateSubnetWithDetails(common.String(subnetName),
 		common.String(bastionCIDRBlock),
 		common.String(bastionSubnetName),
-		availableDomain,
+		nil,
 		common.String(vcnID), nil, isPrivate, securityListIds, state)
 	if err != nil {
 		logrus.Debugf("create new bastion subnet failed with err %v", err)
@@ -1277,15 +1222,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	// Allow internal traffic from other worker nodes by default
 	nodeSecList.EgressSecurityRules = append(nodeSecList.EgressSecurityRules, core.EgressSecurityRule{
 		Protocol:    common.String("all"),
-		Destination: common.String(node1CIDRBlock),
-	})
-	nodeSecList.EgressSecurityRules = append(nodeSecList.EgressSecurityRules, core.EgressSecurityRule{
-		Protocol:    common.String("all"),
-		Destination: common.String(node2CIDRBlock),
-	})
-	nodeSecList.EgressSecurityRules = append(nodeSecList.EgressSecurityRules, core.EgressSecurityRule{
-		Protocol:    common.String("all"),
-		Destination: common.String(node3CIDRBlock),
+		Destination: common.String(nodeCIDRBlock),
 	})
 
 	for _, okeCidr := range okeCidrBlocks {
@@ -1300,15 +1237,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	// Allow internal traffic from other worker nodes by default
 	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
 		Protocol: common.String("all"),
-		Source:   common.String(node1CIDRBlock),
-	})
-	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
-		Protocol: common.String("all"),
-		Source:   common.String(node2CIDRBlock),
-	})
-	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
-		Protocol: common.String("all"),
-		Source:   common.String(node3CIDRBlock),
+		Source:   common.String(nodeCIDRBlock),
 	})
 	// Allow incoming traffic on standard node ports
 	nodePortRange := core.PortRange{
@@ -1317,14 +1246,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	}
 	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
 		Protocol: common.String("6"), // TCP
-		Source:   common.String(service1CIDRBlock),
-		TcpOptions: &core.TcpOptions{
-			DestinationPortRange: &nodePortRange,
-		},
-	})
-	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
-		Protocol: common.String("6"), // TCP
-		Source:   common.String(service2CIDRBlock),
+		Source:   common.String(serviceCIDRBlock),
 		TcpOptions: &core.TcpOptions{
 			DestinationPortRange: &nodePortRange,
 		},
@@ -1346,7 +1268,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	nodeSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, nodeSecList)
 	helpers.FatalIfError(err)
 
-	nodeSubnets, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *subnetRouteID, state.PrivateNodes, []string{*nodeSecListResp.SecurityList.Id})
+	nodeSubnet, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *subnetRouteID, state.PrivateNodes, []string{*nodeSecListResp.SecurityList.Id})
 	helpers.FatalIfError(err)
 
 	// Allow incoming traffic on 80 and 443
@@ -1396,10 +1318,10 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	svcSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, svcSecList)
 	helpers.FatalIfError(err)
 
-	serviceSubnets, err := mgr.CreateServiceSubnets(ctx, state, *r.Vcn.Id, "", false, []string{*svcSecListResp.SecurityList.Id})
+	serviceSubnet, err := mgr.CreateServiceSubnets(ctx, state, *r.Vcn.Id, "", false, []string{*svcSecListResp.SecurityList.Id})
 	helpers.FatalIfError(err)
 
-	return *r.Vcn.Id, serviceSubnets, nodeSubnets, nil
+	return *r.Vcn.Id, serviceSubnet, nodeSubnet, nil
 }
 
 // getResourceID returns a resource ID based on the filter of resource actionType and entityType
