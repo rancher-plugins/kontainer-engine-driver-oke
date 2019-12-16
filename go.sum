@@ -130,6 +130,9 @@ github.com/oracle/oci-go-sdk v5.7.0+incompatible h1:+boHw5Zvx75EzCjXHgVxajPxjU8A
 github.com/oracle/oci-go-sdk v5.7.0+incompatible/go.mod h1:VQb79nF8Z2cwLkLS35ukwStZIg5F66tcBccjip/j888=
 github.com/oracle/oci-go-sdk v7.1.0+incompatible h1:ul/J6rOlLTuVgAB9oSBMwse0U9q8tZj3xx/NjmjRM2g=
 github.com/oracle/oci-go-sdk v7.1.0+incompatible/go.mod h1:VQb79nF8Z2cwLkLS35ukwStZIg5F66tcBccjip/j888=
+github.com/oracle/oci-go-sdk v13.0.0+incompatible h1:ueAty9OrRXfWi+4gyPLKcOpzhf1OSK70mwt36sD/hf8=
+github.com/oracle/oci-go-sdk v13.0.0+incompatible/go.mod h1:VQb79nF8Z2cwLkLS35ukwStZIg5F66tcBccjip/j888=
+github.com/oracle/oci-go-sdk v13.1.0+incompatible/go.mod h1:VQb79nF8Z2cwLkLS35ukwStZIg5F66tcBccjip/j888=
 github.com/oracle/oci-manager v0.0.0-20181210225140-b3f0fa436c6b h1:6HTjRyMR6s3eUEYvrM1nvQ3gIT0RcWOqMoBhzRuzZRM=
 github.com/oracle/oci-manager v0.0.0-20181210225140-b3f0fa436c6b/go.mod h1:mu49MZKiWx61E+enfYwa8SO2eAcdumsr+eLbXCKfxbs=
 github.com/pborman/uuid v1.2.0 h1:J7Q5mO4ysT1dv8hyrUGHb9+ooztCXu1D8MY8DZYsu3g=
