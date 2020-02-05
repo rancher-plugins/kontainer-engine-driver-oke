@@ -1199,6 +1199,23 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 		helpers.FatalIfError(err)
 	}
 
+	// Create the node security list
+	nodeSecurityListIds, err := mgr.CreateNodeSecurityList(ctx, state, r.Vcn.Id, nodeCIDRBlock, serviceCIDRBlock, "Node Security List")
+
+	nodeSubnet, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *subnetRouteID, state.PrivateNodes, nodeSecurityListIds)
+	helpers.FatalIfError(err)
+
+	serviceSecurityListIds, err := mgr.CreateServiceSecurityList(ctx, state, r.Vcn.Id, "Service Security List")
+
+	serviceSubnet, err := mgr.CreateServiceSubnets(ctx, state, *r.Vcn.Id, "", false, serviceSecurityListIds)
+	helpers.FatalIfError(err)
+
+	return *r.Vcn.Id, serviceSubnet, nodeSubnet, nil
+}
+
+// Create the node security list
+func (mgr *ClusterManagerClient) CreateNodeSecurityList(ctx context.Context, state *State, vcnId *string, nodeCidrBlock string, serviceCidrBlock string, name string) ([]string, error) {
+
 	// Allow OKE incoming access worker nodes on port 22 for setup and maintenance
 	okeCidrBlocks := []string{"130.35.0.0/16", "134.70.0.0/17", "138.1.0.0/16", "140.91.0.0/17", "147.154.0.0/16", "192.29.0.0/16"}
 	okeAdminPortRange := core.PortRange{
@@ -1209,10 +1226,10 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	nodeSecList := core.CreateSecurityListRequest{
 		CreateSecurityListDetails: core.CreateSecurityListDetails{
 			CompartmentId:        &state.CompartmentID,
-			DisplayName:          common.String("Node Security List"),
+			DisplayName:          common.String(name),
 			EgressSecurityRules:  []core.EgressSecurityRule{},
 			IngressSecurityRules: []core.IngressSecurityRule{},
-			VcnId:                r.Vcn.Id}}
+			VcnId:                vcnId}}
 
 	// Default egress rule to allow outbound traffic to the internet
 	nodeSecList.EgressSecurityRules = append(nodeSecList.EgressSecurityRules, core.EgressSecurityRule{
@@ -1222,7 +1239,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	// Allow internal traffic from other worker nodes by default
 	nodeSecList.EgressSecurityRules = append(nodeSecList.EgressSecurityRules, core.EgressSecurityRule{
 		Protocol:    common.String("all"),
-		Destination: common.String(nodeCIDRBlock),
+		Destination: common.String(nodeCidrBlock),
 	})
 
 	for _, okeCidr := range okeCidrBlocks {
@@ -1237,7 +1254,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	// Allow internal traffic from other worker nodes by default
 	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
 		Protocol: common.String("all"),
-		Source:   common.String(nodeCIDRBlock),
+		Source:   common.String(nodeCidrBlock),
 	})
 	// Allow incoming traffic on standard node ports
 	nodePortRange := core.PortRange{
@@ -1246,7 +1263,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	}
 	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
 		Protocol: common.String("6"), // TCP
-		Source:   common.String(serviceCIDRBlock),
+		Source:   common.String(serviceCidrBlock),
 		TcpOptions: &core.TcpOptions{
 			DestinationPortRange: &nodePortRange,
 		},
@@ -1268,8 +1285,11 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	nodeSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, nodeSecList)
 	helpers.FatalIfError(err)
 
-	nodeSubnet, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *subnetRouteID, state.PrivateNodes, []string{*nodeSecListResp.SecurityList.Id})
-	helpers.FatalIfError(err)
+	return []string{*nodeSecListResp.SecurityList.Id}, nil
+}
+
+// Create the service security list
+func (mgr *ClusterManagerClient) CreateServiceSecurityList(ctx context.Context, state *State, vcnId *string, name string) ([]string, error) {
 
 	// Allow incoming traffic on 80 and 443
 	httpPortRange := core.PortRange{
@@ -1288,10 +1308,10 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	svcSecList := core.CreateSecurityListRequest{
 		CreateSecurityListDetails: core.CreateSecurityListDetails{
 			CompartmentId:        &state.CompartmentID,
-			DisplayName:          common.String("Service Security List"),
+			DisplayName:          common.String(name),
 			EgressSecurityRules:  []core.EgressSecurityRule{},
 			IngressSecurityRules: []core.IngressSecurityRule{},
-			VcnId:                r.Vcn.Id}}
+			VcnId:                vcnId}}
 
 	svcSecList.IngressSecurityRules = append(svcSecList.IngressSecurityRules, core.IngressSecurityRule{
 		Protocol: common.String("6"), // TCP
@@ -1318,10 +1338,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	svcSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, svcSecList)
 	helpers.FatalIfError(err)
 
-	serviceSubnet, err := mgr.CreateServiceSubnets(ctx, state, *r.Vcn.Id, "", false, []string{*svcSecListResp.SecurityList.Id})
-	helpers.FatalIfError(err)
-
-	return *r.Vcn.Id, serviceSubnet, nodeSubnet, nil
+	return []string{*svcSecListResp.SecurityList.Id}, nil
 }
 
 // getResourceID returns a resource ID based on the filter of resource actionType and entityType
