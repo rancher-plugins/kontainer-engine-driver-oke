@@ -22,6 +22,9 @@ package oke
 import (
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"os"
+
 	"github.com/oracle/oci-go-sdk/common"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
@@ -29,13 +32,11 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
-	"io/ioutil"
 	"k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"os"
 )
 
 const (
@@ -121,6 +122,12 @@ type NetworkConfiguration struct {
 	ServiceLBSubnet2Name string
 	// The number of AD specific subnets (each are created in different availability domains)
 	QuantityOfSubnets int64
+	// Optional name of node pool subnet
+	NodePoolSubnetName string
+	// Optional name of node pool subnet security list
+	NodePoolSubnetSecurityListName string
+	// Optional name of the service subnet security list
+	ServiceSubnetSecurityListName string
 }
 
 // Elements that make up the configuration of each node in the OKE cluster
@@ -330,6 +337,27 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "Additional CIDR from which to allow ingress to worker nodes",
 	}
+	driverFlag.Options["node-pool-subnet-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Optional name for node pool subnet",
+		Default: &types.Default{
+			DefaultString: nodeSubnetName,
+		},
+	}
+	driverFlag.Options["node-pool-security-list-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Optional name for security list of node pool subnet",
+		Default: &types.Default{
+			DefaultString: nodePoolSubnetSecurityListName,
+		},
+	}
+	driverFlag.Options["service-security-list-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Optional name for security list of service subnet",
+		Default: &types.Default{
+			DefaultString: serviceSubnetSecurityListName,
+		},
+	}
 
 	return &driverFlag, nil
 }
@@ -390,11 +418,26 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	}
 
 	state.Network = NetworkConfiguration{
-		VcnCompartmentID:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-compartment-id", "vcnCompartmentId").(string),
-		VCNName:              options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-name", "vcnName").(string),
-		ServiceLBSubnet1Name: options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-1", "loadBalancerSubnetName1").(string),
-		ServiceLBSubnet2Name: options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-2", "loadBalancerSubnetName2").(string),
-		QuantityOfSubnets:    options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
+		VcnCompartmentID:               options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-compartment-id", "vcnCompartmentId").(string),
+		VCNName:                        options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-name", "vcnName").(string),
+		ServiceLBSubnet1Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-1", "loadBalancerSubnetName1").(string),
+		ServiceLBSubnet2Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-2", "loadBalancerSubnetName2").(string),
+		QuantityOfSubnets:              options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
+		NodePoolSubnetName:             options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-name", "nodePoolSubnetName").(string),
+		NodePoolSubnetSecurityListName: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-security-list-name", "nodePoolSubnetSecurityListName").(string),
+		ServiceSubnetSecurityListName:  options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-subnet-security-list-name", "serviceSubnetSecurityListName").(string),
+	}
+
+	if state.Network.NodePoolSubnetName == "" {
+		state.Network.NodePoolSubnetName = nodeSubnetName
+	}
+
+	if state.Network.NodePoolSubnetSecurityListName == "" {
+		state.Network.NodePoolSubnetSecurityListName = nodePoolSubnetSecurityListName
+	}
+
+	if state.Network.ServiceSubnetSecurityListName == "" {
+		state.Network.ServiceSubnetSecurityListName = serviceSubnetSecurityListName
 	}
 
 	if state.NodePool.QuantityPerSubnet == 0 {
