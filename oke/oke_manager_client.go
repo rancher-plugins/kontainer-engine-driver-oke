@@ -41,13 +41,15 @@ import (
 
 const (
 	// TODO VCN block only needs to be large enough for the subnets below
-	vcnCIDRBlock      = "10.0.0.0/16"
-	nodeCIDRBlock     = "10.0.10.0/24"
-	bastionCIDRBlock  = "10.0.16.0/24"
-	serviceCIDRBlock  = "10.0.20.0/24"
-	nodeSubnetName    = "nodedns"
-	serviceSubnetName = "svcdns"
-	bastionSubnetName = "bastion"
+	vcnCIDRBlock                   = "10.0.0.0/16"
+	nodeCIDRBlock                  = "10.0.10.0/24"
+	bastionCIDRBlock               = "10.0.16.0/24"
+	serviceCIDRBlock               = "10.0.20.0/24"
+	nodeSubnetName                 = "nodedns"
+	serviceSubnetName              = "svcdns"
+	bastionSubnetName              = "bastion"
+	nodePoolSubnetSecurityListName = "Node Security List"
+	serviceSubnetSecurityListName  = "Service Security List"
 )
 
 // Defines / contains the OCI/OKE/Identity clients and operations.
@@ -945,11 +947,10 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 	req.CompartmentId = &state.CompartmentID
 
 	// Create regional subnet
-	nodeSubnetName := nodeSubnetName
 	subnet1, err := mgr.CreateSubnetWithDetails(
-		common.String(nodeSubnetName),
+		common.String(state.Network.NodePoolSubnetName),
 		common.String(nodeCIDRBlock),
-		common.String(nodeSubnetName),
+		common.String(state.Network.NodePoolSubnetDnsDomainName),
 		nil,
 		common.String(vcnID), common.String(subnetRouteID), isPrivate, securityListIds, state)
 	if err != nil {
@@ -974,14 +975,14 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 	// Create regional subnet for services
 	var svcSubnetName = ""
 	if state.Network.ServiceLBSubnet1Name == "" {
-		svcSubnetName = serviceSubnetName
+		svcSubnetName = state.Network.ServiceSubnetDnsDomainName
 	} else {
 		svcSubnetName = state.Network.ServiceLBSubnet1Name
 	}
 	// Create regional subnet
 	subnet, err := mgr.CreateSubnetWithDetails(common.String(svcSubnetName),
 		common.String(serviceCIDRBlock),
-		common.String(serviceSubnetName),
+		common.String(state.Network.ServiceSubnetDnsDomainName),
 		nil,
 		common.String(vcnID), nil, isPrivate, securityListIds, state)
 	if err != nil {
@@ -1200,12 +1201,12 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	}
 
 	// Create the node security list
-	nodeSecurityListIds, err := mgr.CreateNodeSecurityList(ctx, state, r.Vcn.Id, nodeCIDRBlock, serviceCIDRBlock, "Node Security List")
+	nodeSecurityListIds, err := mgr.CreateNodeSecurityList(ctx, state, r.Vcn.Id, nodeCIDRBlock, serviceCIDRBlock, state.Network.NodePoolSubnetSecurityListName)
 
 	nodeSubnet, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *subnetRouteID, state.PrivateNodes, nodeSecurityListIds)
 	helpers.FatalIfError(err)
 
-	serviceSecurityListIds, err := mgr.CreateServiceSecurityList(ctx, state, r.Vcn.Id, "Service Security List")
+	serviceSecurityListIds, err := mgr.CreateServiceSecurityList(ctx, state, r.Vcn.Id, state.Network.ServiceSubnetSecurityListName)
 
 	serviceSubnet, err := mgr.CreateServiceSubnets(ctx, state, *r.Vcn.Id, "", false, serviceSecurityListIds)
 	helpers.FatalIfError(err)
