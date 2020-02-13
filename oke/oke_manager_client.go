@@ -947,11 +947,10 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 	req.CompartmentId = &state.CompartmentID
 
 	// Create regional subnet
-	nodeSubnetName := state.Network.NodePoolSubnetName
 	subnet1, err := mgr.CreateSubnetWithDetails(
-		common.String(nodeSubnetName),
+		common.String(state.Network.NodePoolSubnetName),
 		common.String(nodeCIDRBlock),
-		common.String(nodeSubnetName),
+		common.String(state.Network.NodePoolSubnetDnsDomainName),
 		nil,
 		common.String(vcnID), common.String(subnetRouteID), isPrivate, securityListIds, state)
 	if err != nil {
@@ -976,14 +975,14 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 	// Create regional subnet for services
 	var svcSubnetName = ""
 	if state.Network.ServiceLBSubnet1Name == "" {
-		svcSubnetName = serviceSubnetName
+		svcSubnetName = state.Network.ServiceSubnetDnsDomainName
 	} else {
 		svcSubnetName = state.Network.ServiceLBSubnet1Name
 	}
 	// Create regional subnet
 	subnet, err := mgr.CreateSubnetWithDetails(common.String(svcSubnetName),
 		common.String(serviceCIDRBlock),
-		common.String(serviceSubnetName),
+		common.String(state.Network.ServiceSubnetDnsDomainName),
 		nil,
 		common.String(vcnID), nil, isPrivate, securityListIds, state)
 	if err != nil {

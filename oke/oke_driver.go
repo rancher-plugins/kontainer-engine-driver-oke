@@ -126,8 +126,12 @@ type NetworkConfiguration struct {
 	NodePoolSubnetName string
 	// Optional name of node pool subnet security list
 	NodePoolSubnetSecurityListName string
+	// Optional name of node pool dns domain name
+	NodePoolSubnetDnsDomainName string
 	// Optional name of the service subnet security list
 	ServiceSubnetSecurityListName string
+	// Optional name of the service subnet dns domain name
+	ServiceSubnetDnsDomainName string
 }
 
 // Elements that make up the configuration of each node in the OKE cluster
@@ -351,11 +355,25 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 			DefaultString: nodePoolSubnetSecurityListName,
 		},
 	}
+	driverFlag.Options["node-pool-dns-domain-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Optional name for DNS domain of node pool subnet",
+		Default: &types.Default{
+			DefaultString: nodeSubnetName,
+		},
+	}
 	driverFlag.Options["service-security-list-name"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "Optional name for security list of service subnet",
 		Default: &types.Default{
 			DefaultString: serviceSubnetSecurityListName,
+		},
+	}
+	driverFlag.Options["service-dns-domain-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Optional name for DNS domain of service subnet",
+		Default: &types.Default{
+			DefaultString: serviceSubnetName,
 		},
 	}
 
@@ -425,7 +443,9 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		QuantityOfSubnets:              options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
 		NodePoolSubnetName:             options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-name", "nodePoolSubnetName").(string),
 		NodePoolSubnetSecurityListName: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-security-list-name", "nodePoolSubnetSecurityListName").(string),
+		NodePoolSubnetDnsDomainName:    options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-dns-domain-list-name", "nodePoolSubnetDnsDomainName").(string),
 		ServiceSubnetSecurityListName:  options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-subnet-security-list-name", "serviceSubnetSecurityListName").(string),
+		ServiceSubnetDnsDomainName:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-subnet-dns-domain-name", "serviceSubnetDnsDomainName").(string),
 	}
 
 	if state.Network.NodePoolSubnetName == "" {
@@ -436,8 +456,16 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		state.Network.NodePoolSubnetSecurityListName = nodePoolSubnetSecurityListName
 	}
 
+	if state.Network.NodePoolSubnetDnsDomainName == "" {
+		state.Network.NodePoolSubnetDnsDomainName = nodeSubnetName
+	}
+
 	if state.Network.ServiceSubnetSecurityListName == "" {
 		state.Network.ServiceSubnetSecurityListName = serviceSubnetSecurityListName
+	}
+
+	if state.Network.ServiceSubnetDnsDomainName == "" {
+		state.Network.ServiceSubnetDnsDomainName = serviceSubnetName
 	}
 
 	if state.NodePool.QuantityPerSubnet == 0 {
