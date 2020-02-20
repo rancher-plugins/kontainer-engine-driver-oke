@@ -222,13 +222,19 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		return err
 	}
 
+	// Make sure the requested image is one of the available node images.
+	matchedImage, err := matchNodePoolImage(mgr.containerEngineClient, state.NodePool.NodeImageName, state.ClusterID)
+	if err != nil {
+		return err
+	}
+
 	// Create a node pool for the cluster
 	npReq := containerengine.CreateNodePoolRequest{}
 	npReq.Name = common.String(state.Name + "-1")
 	npReq.CompartmentId = common.String(state.CompartmentID)
 	npReq.ClusterId = &state.ClusterID
 	npReq.KubernetesVersion = &state.KubernetesVersion
-	npReq.NodeImageName = common.String(state.NodePool.NodeImageName)
+	npReq.NodeImageName = common.String(matchedImage)
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
 	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.
@@ -1399,6 +1405,57 @@ func getDefaultKubernetesVersion(client containerengine.ContainerEngineClient) (
 
 	// TODO assuming the last item in the list is the latest version.
 	return &kubernetesVersion[len(kubernetesVersion)-1], nil
+}
+
+func getNodePoolImages(client containerengine.ContainerEngineClient, clusterId string) ([]string, error) {
+
+	optionId := "all"
+	if clusterId != "" {
+		optionId = clusterId
+	}
+	getNodePoolOptionsReq := containerengine.GetNodePoolOptionsRequest{
+		NodePoolOptionId: &optionId,
+	}
+	getNodePoolOptionsResp, err := client.GetNodePoolOptions(context.Background(), getNodePoolOptionsReq)
+	if err != nil {
+		return nil, err
+	}
+
+	nodePoolImages := getNodePoolOptionsResp.Images
+
+	if len(nodePoolImages) < 1 {
+		return nil, fmt.Errorf("no node pool images are available")
+	}
+
+	return nodePoolImages, nil
+}
+
+// matchNodePoolImage returns the first matched node pool image name for the cluster id (or all if none is specified)
+func matchNodePoolImage(client containerengine.ContainerEngineClient, nodeImageName string, clusterId string) (string, error) {
+
+	if nodeImageName == "" {
+		return "", fmt.Errorf("cannot retrieve node pool images from image name %s", nodeImageName)
+	}
+
+	// Get list of all images
+	logrus.Debugf("Attempting to match image from %s", nodeImageName)
+
+	r, err := getNodePoolImages(client, clusterId)
+	if err != nil {
+		return "", err
+	}
+
+	// Loop through the images to find a match.
+	for _, image := range r {
+		if strings.HasPrefix(image, nodeImageName) {
+			if !strings.Contains(image, "GPU") {
+				logrus.Debugf("Matched node image %s", image)
+				return image, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("could not find a match for an image named %s", nodeImageName)
 }
 
 type SignRequest func(*http.Request) (*http.Request, error)
