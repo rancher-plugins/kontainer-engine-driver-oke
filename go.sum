@@ -159,6 +159,8 @@ github.com/prometheus/procfs v0.0.0-20181005140218-185b4288413d/go.mod h1:c3At6R
 github.com/prometheus/procfs v0.0.2/go.mod h1:TjEm7ze935MbeOT/UhFTIMYKhuLP4wbCsTZCD3I8kEA=
 github.com/prometheus/procfs v0.0.3 h1:CTwfnzjQ+8dS6MhHHu4YswVAD99sL2wjPqP+VkURmKE=
 github.com/prometheus/procfs v0.0.3/go.mod h1:4A/X28fw3Fc593LaREMrKMqOKvUAntwMDaekg4FpcdQ=
+github.com/rancher-plugins/kontainer-engine-driver-oke v1.2.2 h1:+cHc19mjO12eDAaMe6CTMuT5hveJRXfi9Yqum42jvCE=
+github.com/rancher-plugins/kontainer-engine-driver-oke v1.2.2/go.mod h1:CafX/H1aOXIoch5S9VOurGE6iCU/7lgqD6NYtqeK5Cg=
 github.com/rancher/kontainer-engine v0.0.0-20190711161432-b98bad2201bb h1:m0l+4S8l0C3dtCaInmyV/5S5eKRWgxONaP/haDNWXRE=
 github.com/rancher/kontainer-engine v0.0.0-20190711161432-b98bad2201bb/go.mod h1:vd8Kt5ChdnUTH22Ub946/I25pTXt8ipS4X+4k1qPymU=
 github.com/rancher/kontainer-engine v0.0.1-dev h1:fVVFemcmxN4/KdXBTNVrSQd8mIung/YLY9Z/B9SjyoA=
