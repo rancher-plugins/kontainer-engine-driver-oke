@@ -32,7 +32,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -109,6 +109,9 @@ type State struct {
 	NodePool NodeConfiguration
 	// cluster info
 	ClusterInfo types.ClusterInfo
+
+	// Should the Deletion of VCN be skipped
+	SkipVCNDelete bool
 }
 
 // Elements that make up the Network configuration (and state) for the OKE cluster
@@ -203,6 +206,10 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 		return errors.Wrap(err, "could not delete cluster")
 	}
 
+	if state.SkipVCNDelete {
+		return nil
+	}
+
 	// TODO we could be deleting a preexisting VCN here
 	logrus.Info("Deleting VCN")
 	err = oke.DeleteVCN(ctx, vcnID)
@@ -281,6 +288,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	driverFlag.Options["enable-tiller"] = &types.Flag{
 		Type:  types.BoolType,
 		Usage: "Enable the kubernetes dashboard",
+	}
+	driverFlag.Options["skip-vcn-delete"] = &types.Flag{
+		Type:  types.BoolType,
+		Usage: "Whether to skip deleting VCN",
 	}
 	driverFlag.Options["node-public-key-path"] = &types.Flag{
 		Type:  types.StringType,
@@ -414,6 +425,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.Description = options.GetValueFromDriverOptions(driverOptions, types.StringType, "description").(string)
 	state.EnableKubernetesDashboard = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-kubernetes-dashboard", "enableKubernetesDashboard").(bool)
 	state.EnableTiller = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-tiller", "enableTiller").(bool)
+	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVCNDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
 	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesVersion").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
