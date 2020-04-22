@@ -296,15 +296,24 @@ func (mgr *ClusterManagerClient) GetNodePoolByID(ctx context.Context, nodePoolID
 	return resp.NodePool, nil
 }
 
-// ScaleNodePool updates the number of nodes in each subnet, or an error.
-func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID string, quantityPerSubnet int) error {
-	logrus.Debugf("scaling node pool %s to %d nodes per subnet", nodePoolID, quantityPerSubnet)
+// ScaleNodePool updates the number of nodes in each availability-domain, or an error.
+func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID string, quantityPerAD int, compartmentID string) error {
+	logrus.Debugf("scaling node pool %s to %d nodes per availability-domain", nodePoolID, quantityPerAD)
+
+	req := identity.ListAvailabilityDomainsRequest{}
+	req.CompartmentId = &compartmentID
+	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
+	if err != nil {
+		return err
+	}
 
 	npReq := containerengine.UpdateNodePoolRequest{}
 	npReq.NodePoolId = common.String(nodePoolID)
-	npReq.QuantityPerSubnet = common.Int(quantityPerSubnet)
+	npReq.NodeConfigDetails = &containerengine.UpdateNodePoolNodeConfigDetails{
+		Size: common.Int(len(ads.Items) * quantityPerAD),
+	}
 
-	_, err := mgr.containerEngineClient.UpdateNodePool(ctx, npReq)
+	_, err = mgr.containerEngineClient.UpdateNodePool(ctx, npReq)
 	if err != nil {
 		logrus.Debugf("scale node pool request failed with err %v", err)
 		return err

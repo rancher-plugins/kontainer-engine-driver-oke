@@ -400,7 +400,7 @@ func (d *OKEDriver) GetDriverUpdateOptions(ctx context.Context) (*types.DriverFl
 	}
 	driverFlag.Options["quantity-per-subnet"] = &types.Flag{
 		Type:  types.IntType,
-		Usage: "The updated number of worker nodes in each subnet to update. 1 (default) means no updates",
+		Usage: "The updated number of worker nodes in each subnet / availability-domain to update. 1 (default) means no updates",
 	}
 	driverFlag.Options["kubernetes-version"] = &types.Flag{
 		Type:  types.StringType,
@@ -562,6 +562,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		// Create a new Virtual Cloud Network with the default number of subnets
 		state.Network.VCNName = defaultVCNNamePrefix + state.Name
 		state.Network.ServiceLBSubnet1Name = defaultServiceSubnetPrefix + state.Name
+		state.Network.QuantityOfSubnets = 1
 
 		logrus.Infof("Creating a new VCN and required network resources for OKE cluster %s", state.Name)
 		vcnID, serviceSubnetIDs, nodeSubnetIds, err = oke.CreateVCNAndNetworkResources(&state)
@@ -661,7 +662,7 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 	}
 
 	if newState.NodePool.QuantityPerSubnet != state.NodePool.QuantityPerSubnet {
-		logrus.Infof("Updating quantity of nodes per subnet to %d", uint64(newState.NodePool.QuantityPerSubnet))
+		logrus.Infof("Updating quantity of nodes per availability-domain to %d", uint64(newState.NodePool.QuantityPerSubnet))
 		err = d.SetClusterSize(ctx, info, &types.NodeCount{Count: int64(newState.NodePool.QuantityPerSubnet) * int64(state.Network.QuantityOfSubnets)})
 		if err != nil {
 			return nil, err
@@ -824,13 +825,7 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 		return errors.Wrap(err, "could not get Oracle Container Engine client")
 	}
 
-	if count.Count%state.Network.QuantityOfSubnets != 0 {
-		return fmt.Errorf("you must scale up/down node(s) in each subnet i.e. cluster-size must be an even multiple of %d", uint64(state.Network.QuantityOfSubnets))
-	}
-
-	desiredQtyPerSubnet := int(count.Count / state.Network.QuantityOfSubnets)
-
-	logrus.Infof("Updating the number of nodes in each subnet to %d", desiredQtyPerSubnet)
+	logrus.Infof("Updating the number of nodes in each availability domain to %d", count.Count)
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
 		return errors.Wrap(err, "could not retrieve node pool id")
@@ -844,17 +839,12 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 	if err != nil {
 		return errors.Wrap(err, "could not retrieve node pool")
 	}
-	if *nodePool.QuantityPerSubnet == desiredQtyPerSubnet {
-		logrus.Infof("OKE cluster size is already %d (i.e. %d node(s) per subnet)", uint64(count.Count), desiredQtyPerSubnet)
+	if int64(*nodePool.QuantityPerSubnet) == count.Count {
+		logrus.Infof("OKE cluster size is already %d (i.e. %d node(s) per availability-domain)", uint64(count.Count), count.Count)
 		return nil
 	}
 
-	if *nodePool.QuantityPerSubnet == desiredQtyPerSubnet {
-		logrus.Infof("OKE cluster size is already %d (i.e. %d node(s) per subnet)", uint64(count.Count), desiredQtyPerSubnet)
-		return nil
-	}
-
-	err = oke.ScaleNodePool(ctx, nodePoolIds[0], desiredQtyPerSubnet)
+	err = oke.ScaleNodePool(ctx, nodePoolIds[0], int(count.Count), state.CompartmentID)
 	if err != nil {
 		return errors.Wrap(err, "could not adjust the number of nodes in the pool")
 	}
