@@ -234,10 +234,10 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	// get Image Id
 	image, err := getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
 	if err != nil {
-		fmt.Printf("Node ID not found")
+		logrus.Printf("Node ID not found")
 		npReq.NodeImageName = common.String(state.NodePool.NodeImageName)
 	} else {
-		fmt.Printf("Node ID found %v", image.Id)
+		logrus.Printf("Node ID found %v", image.Id)
 		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
 	}
 	npReq.Name = common.String(state.Name + "-1")
