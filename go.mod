@@ -4,7 +4,7 @@ go 1.12
 
 require (
 	github.com/gogo/protobuf v1.3.0 // indirect
-	github.com/oracle/oci-go-sdk v13.0.0+incompatible
+	github.com/oracle/oci-go-sdk v19.0.0+incompatible
 	github.com/pkg/errors v0.8.1
 	github.com/rancher/kontainer-engine v0.0.0-20190711161432-b98bad2201bb
 	github.com/rancher/rke v0.2.8 // indirect
