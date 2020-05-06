@@ -56,6 +56,7 @@ const (
 type ClusterManagerClient struct {
 	configuration         common.ConfigurationProvider
 	containerEngineClient containerengine.ContainerEngineClient
+	computeClient         core.ComputeClient
 	virtualNetworkClient  core.VirtualNetworkClient
 	identityClient        identity.IdentityClient
 	sleepDuration         time.Duration
@@ -71,6 +72,11 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 		logrus.Debugf("create new ContainerEngine client failed with err %v", err)
 		return nil, err
 	}
+	coreComputeClient, err := core.NewComputeClientWithConfigurationProvider(configuration)
+	if err != nil {
+		logrus.Debugf("create new Compute client failed with err %v", err)
+		return nil, err
+	}
 	vNetClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(configuration)
 	if err != nil {
 		logrus.Debugf("create new VirtualNetwork client failed with err %v", err)
@@ -84,6 +90,7 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 	c := &ClusterManagerClient{
 		configuration:         configuration,
 		containerEngineClient: containerClient,
+		computeClient:         coreComputeClient,
 		virtualNetworkClient:  vNetClient,
 		identityClient:        identityClient,
 		sleepDuration:         5,
@@ -224,11 +231,19 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 
 	// Create a node pool for the cluster
 	npReq := containerengine.CreateNodePoolRequest{}
+	// get Image Id
+	image, err := getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
+	if err != nil {
+		fmt.Printf("Node ID not found")
+		npReq.NodeImageName = common.String(state.NodePool.NodeImageName)
+	} else {
+		fmt.Printf("Node ID found %v", image.Id)
+		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
+	}
 	npReq.Name = common.String(state.Name + "-1")
 	npReq.CompartmentId = common.String(state.CompartmentID)
 	npReq.ClusterId = &state.ClusterID
 	npReq.KubernetesVersion = &state.KubernetesVersion
-	npReq.NodeImageName = common.String(state.NodePool.NodeImageName)
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
 	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.
@@ -273,6 +288,35 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	}
 
 	return nil
+}
+
+func getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (core.Image, error) {
+	request := core.ListImagesRequest{
+		CompartmentId:   common.String(compartment),
+		OperatingSystem: common.String("Oracle Linux"),
+		Shape:           common.String(shape),
+	}
+	r, err := c.ListImages(ctx, request)
+
+	if err != nil {
+		logrus.Debugf("listing image id's failed with err %v", err)
+		return core.Image{}, err
+	}
+
+	index := -1
+	for n, i := range r.Items {
+		if strings.Compare(displayName, *i.DisplayName) == 0 {
+			index = n
+			break
+		}
+	}
+
+	if index < 0 {
+		logrus.Debugf("unable to find an image for displayName: %s", displayName)
+		return core.Image{}, fmt.Errorf("unable to retrieve image %s", displayName)
+	}
+
+	return r.Items[index], err
 }
 
 // GetNodePoolByID returns the node pool with the specified Id, or an error.
