@@ -137,6 +137,8 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 
 	// wait until cluster creation work request complete
 	logrus.Debugf("waiting for cluster %s to reach Active status..", state.Name)
+	// initial delay since subsequent back-off function waits longer each time the retry fails
+	time.Sleep(time.Minute * 3)
 	workReqRespCluster, err := waitUntilWorkRequestComplete(mgr.containerEngineClient, clusterResp.OpcWorkRequestId)
 	if err != nil {
 		logrus.Debugf("get work request failed with err %v", err)
@@ -234,10 +236,10 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	// get Image Id
 	image, err := getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
 	if err != nil {
-		logrus.Printf("Node ID not found")
-		npReq.NodeImageName = common.String(state.NodePool.NodeImageName)
+		logrus.Printf("Node image ID not found")
+		return err
 	} else {
-		logrus.Printf("Node ID found %v", image.Id)
+		logrus.Printf("Node image ID found %v", *image.Id)
 		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
 	}
 	npReq.Name = common.String(state.Name + "-1")
@@ -281,10 +283,38 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 
 	// wait until cluster creation work request complete
 	logrus.Debugf("waiting for node pool to be created...")
-	_, err = waitUntilWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
+	workReqRespNodePool, err := waitUntilWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
 	if err != nil {
 		logrus.Debugf("get work request failed with err %v", err)
 		return err
+	}
+	// Wait for at least one individual nodes in the node pool to be created
+	if state.NodePool.QuantityPerSubnet > 0 {
+		nodePoolID := getResourceID(workReqRespNodePool.Resources, containerengine.WorkRequestResourceActionTypeCreated,
+			string(containerengine.ListWorkRequestsResourceTypeNodepool))
+		if nodePoolID == nil {
+			return fmt.Errorf("could not retrieve node pool ID")
+		}
+
+		doneWaiting := false
+		for retry := 15; retry > 0; retry-- {
+			np, err := mgr.GetNodePoolByID(ctx, *nodePoolID)
+			if err != nil {
+				doneWaiting = true
+			}
+			for _, node := range np.Nodes {
+				if node.LifecycleState != containerengine.NodeLifecycleStateCreating && node.LifecycleState !=
+					containerengine.NodeLifecycleStateUpdating && node.LifecycleState !=
+					containerengine.NodeLifecycleStateFailing {
+					doneWaiting = true
+					break
+				}
+				time.Sleep(1 * time.Minute)
+			}
+			if doneWaiting {
+				break
+			}
+		}
 	}
 
 	return nil
@@ -766,8 +796,10 @@ func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID st
 		return err
 	}
 
-	logrus.Debugf("waiting for cluster to be deleted...")
 	// wait until cluster deletion work request complete
+	logrus.Debugf("waiting for cluster to be deleted...")
+	// initial delay since subsequent back-off function waits longer each time the retry fails
+	time.Sleep(time.Minute * 3)
 	_, err = waitUntilWorkRequestComplete(mgr.containerEngineClient, deleteClusterResp.OpcWorkRequestId)
 	if err != nil {
 		logrus.Debugf("get work request failed with err %v", err)
@@ -1416,9 +1448,10 @@ func waitUntilWorkRequestComplete(client containerengine.ContainerEngineClient, 
 		return containerengine.GetWorkRequestResponse{}, fmt.Errorf("a valid workRequestID is required")
 	}
 
-	// retry GetWorkRequest call until TimeFinished is set
+	// retry GetWorkRequest call until operation is no longer waiting to start or in in-progress
 	shouldRetryFunc := func(r common.OCIOperationResponse) bool {
-		return r.Response.(containerengine.GetWorkRequestResponse).TimeFinished == nil
+		return r.Response.(containerengine.GetWorkRequestResponse).Status == containerengine.WorkRequestStatusInProgress ||
+			r.Response.(containerengine.GetWorkRequestResponse).Status == containerengine.WorkRequestStatusAccepted
 	}
 
 	getWorkReq := containerengine.GetWorkRequestRequest{
