@@ -150,6 +150,8 @@ type NodeConfiguration struct {
 	NodePublicSSHKeyContents string
 	// The number of nodes in each subnet / availability domain
 	QuantityPerSubnet int64
+	// The optional custom boot volume size to use for the nodes
+	CustomBootVolumeSize int64
 }
 
 func NewDriver() types.Driver {
@@ -280,6 +282,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	driverFlag.Options["kubernetes-version"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The Kubernetes version that will be used for your master and worker nodes e.g. v1.11.9, v1.12.7",
+	}
+	driverFlag.Options["custom-boot-volume-size"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "Optional custom boot volume size for the nodes",
 	}
 	driverFlag.Options["enable-kubernetes-dashboard"] = &types.Flag{
 		Type:  types.BoolType,
@@ -440,6 +446,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.WorkerNodeIngressCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-node-ingress-cidr", "WorkerNodeIngressCidr", "workerNodeIngressCidr").(string)
 
 	state.NodePool = NodeConfiguration{
+		CustomBootVolumeSize:     options.GetValueFromDriverOptions(driverOptions, types.IntType, "custom-boot-volume-size", "customBootVolumeSize").(int64),
 		NodeImageName:            options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image", "nodeImage").(string),
 		NodeShape:                options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeShape").(string),
 		NodePublicSSHKeyPath:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-path", "nodePublicKeyPath").(string),
@@ -525,6 +532,8 @@ func (s *State) validate() error {
 		return fmt.Errorf(`"node-shape " is required`)
 	} else if s.Network.VCNName != "" && (s.Network.ServiceLBSubnet1Name == "") {
 		return fmt.Errorf(`"vcn-name" and "load-balancer-subnet-name-1" must be set together"`)
+	} else if s.NodePool.CustomBootVolumeSize != 0 && (s.NodePool.CustomBootVolumeSize < 50 || s.NodePool.CustomBootVolumeSize > 16384) {
+		return fmt.Errorf(`"custom-boot-size", if set, must be larger than 50 and smaller than 32768 (GB)"`)
 	}
 
 	return nil
