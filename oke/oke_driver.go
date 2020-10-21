@@ -25,7 +25,7 @@ import (
 	"io/ioutil"
 	"os"
 
-	"github.com/oracle/oci-go-sdk/common"
+	"github.com/oracle/oci-go-sdk/v27/common"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
 	"github.com/rancher/kontainer-engine/types"
