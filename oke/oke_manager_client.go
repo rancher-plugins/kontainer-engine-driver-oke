@@ -239,13 +239,20 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		return err
 	} else {
 		logrus.Printf("Node image ID found %v", *image.Id)
-		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
+		// Set a custom boot volume size if set
+		if state.NodePool.CustomBootVolumeSize != 0 {
+			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id,
+				BootVolumeSizeInGBs: common.Int64(state.NodePool.CustomBootVolumeSize)}
+		} else {
+			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
+		}
 	}
 	npReq.Name = common.String(state.Name + "-1")
 	npReq.CompartmentId = common.String(state.CompartmentID)
 	npReq.ClusterId = &state.ClusterID
 	npReq.KubernetesVersion = &state.KubernetesVersion
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
+
 	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.
 	npReq.InitialNodeLabels = []containerengine.KeyValue{{Key: common.String("driver"), Value: common.String("oraclekubernetesengine")}}
