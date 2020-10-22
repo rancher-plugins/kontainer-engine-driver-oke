@@ -252,6 +252,11 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	npReq.ClusterId = &state.ClusterID
 	npReq.KubernetesVersion = &state.KubernetesVersion
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
+	if state.NodePool.FlexOCPUs != 0 {
+		logrus.Debugf("creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
+		var ocpus = float32(state.NodePool.FlexOCPUs)
+		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
+	}
 
 	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.

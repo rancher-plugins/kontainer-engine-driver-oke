@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 
 	"github.com/oracle/oci-go-sdk/v27/common"
 	"github.com/pkg/errors"
@@ -152,6 +153,8 @@ type NodeConfiguration struct {
 	QuantityPerSubnet int64
 	// The optional custom boot volume size to use for the nodes
 	CustomBootVolumeSize int64
+	// The optional number of OCPUs for each node (each OCPU is equivalent to one physical core of an Intel Xeon processor)
+	FlexOCPUs int64
 }
 
 func NewDriver() types.Driver {
@@ -290,6 +293,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	driverFlag.Options["enable-kubernetes-dashboard"] = &types.Flag{
 		Type:  types.BoolType,
 		Usage: "Enable the kubernetes dashboard",
+	}
+	driverFlag.Options["flex-ocpus"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "Optional number of OCPUs for nodes (requires flexible shape) be specified with --node-shape",
 	}
 	driverFlag.Options["enable-tiller"] = &types.Flag{
 		Type:  types.BoolType,
@@ -446,6 +453,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.WorkerNodeIngressCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-node-ingress-cidr", "WorkerNodeIngressCidr", "workerNodeIngressCidr").(string)
 
 	state.NodePool = NodeConfiguration{
+		FlexOCPUs:                options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-ocpus", "flexOcpus").(int64),
 		CustomBootVolumeSize:     options.GetValueFromDriverOptions(driverOptions, types.IntType, "custom-boot-volume-size", "customBootVolumeSize").(int64),
 		NodeImageName:            options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image", "nodeImage").(string),
 		NodeShape:                options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeShape").(string),
@@ -534,6 +542,10 @@ func (s *State) validate() error {
 		return fmt.Errorf(`"vcn-name" and "load-balancer-subnet-name-1" must be set together"`)
 	} else if s.NodePool.CustomBootVolumeSize != 0 && (s.NodePool.CustomBootVolumeSize < 50 || s.NodePool.CustomBootVolumeSize > 16384) {
 		return fmt.Errorf(`"custom-boot-size", if set, must be larger than 50 and smaller than 32768 (GB)"`)
+	} else if s.NodePool.FlexOCPUs > 0 && !strings.Contains(strings.ToLower(s.NodePool.NodeShape), "flex") {
+		return fmt.Errorf(`"flex-ocpus", requires nodes to use a flexible shape with --node-shape"`)
+	} else if s.NodePool.FlexOCPUs != 0 && (s.NodePool.FlexOCPUs > 64) {
+		return fmt.Errorf(`"flex-ocpus", if set, must not be larger than 64"`)
 	}
 
 	return nil
