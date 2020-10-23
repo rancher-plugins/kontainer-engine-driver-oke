@@ -253,7 +253,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	}
 	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
 		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(ads.Items)),
-		Size:             common.Int(int(state.NodePool.QuantityPerSubnet)),
+		Size:             common.Int(int(state.NodePool.QuantityPerSubnet) * len(ads.Items)),
 	}
 
 	// Match up subnet(s) to availability domains
