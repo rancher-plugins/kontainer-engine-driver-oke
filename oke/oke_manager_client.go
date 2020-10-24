@@ -27,14 +27,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oracle/oci-go-sdk/common"
-	"github.com/oracle/oci-go-sdk/containerengine"
-	"github.com/oracle/oci-go-sdk/core"
-	"github.com/oracle/oci-go-sdk/example/helpers"
-	"github.com/oracle/oci-go-sdk/identity"
+	"github.com/oracle/oci-go-sdk/v27/common"
+	"github.com/oracle/oci-go-sdk/v27/containerengine"
+	"github.com/oracle/oci-go-sdk/v27/core"
+	"github.com/oracle/oci-go-sdk/v27/example/helpers"
+	"github.com/oracle/oci-go-sdk/v27/identity"
 	"github.com/rancher/kontainer-engine/store"
 	"github.com/sirupsen/logrus"
-	//"github.com/rancher/kontainer-engine/types"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
 )
@@ -240,13 +239,25 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		return err
 	} else {
 		logrus.Printf("Node image ID found %v", *image.Id)
-		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
+		// Set a custom boot volume size if set
+		if state.NodePool.CustomBootVolumeSize != 0 {
+			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id,
+				BootVolumeSizeInGBs: common.Int64(state.NodePool.CustomBootVolumeSize)}
+		} else {
+			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
+		}
 	}
 	npReq.Name = common.String(state.Name + "-1")
 	npReq.CompartmentId = common.String(state.CompartmentID)
 	npReq.ClusterId = &state.ClusterID
 	npReq.KubernetesVersion = &state.KubernetesVersion
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
+	if state.NodePool.FlexOCPUs != 0 {
+		logrus.Debugf("creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
+		var ocpus = float32(state.NodePool.FlexOCPUs)
+		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
+	}
+
 	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.
 	npReq.InitialNodeLabels = []containerengine.KeyValue{{Key: common.String("driver"), Value: common.String("oraclekubernetesengine")}}
