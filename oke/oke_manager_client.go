@@ -23,6 +23,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io/ioutil"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -71,21 +72,29 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 		logrus.Debugf("create new ContainerEngine client failed with err %v", err)
 		return nil, err
 	}
+	configureClient(containerClient.BaseClient.HTTPClient.(*http.Client))
+
 	coreComputeClient, err := core.NewComputeClientWithConfigurationProvider(configuration)
 	if err != nil {
 		logrus.Debugf("create new Compute client failed with err %v", err)
 		return nil, err
 	}
+	configureClient(coreComputeClient.BaseClient.HTTPClient.(*http.Client))
+
 	vNetClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(configuration)
 	if err != nil {
 		logrus.Debugf("create new VirtualNetwork client failed with err %v", err)
 		return nil, err
 	}
+	configureClient(vNetClient.BaseClient.HTTPClient.(*http.Client))
+
 	identityClient, err := identity.NewIdentityClientWithConfigurationProvider(configuration)
 	if err != nil {
 		logrus.Debugf("create new Identity client failed with err %v", err)
 		return nil, err
 	}
+	configureClient(identityClient.BaseClient.HTTPClient.(*http.Client))
+
 	c := &ClusterManagerClient{
 		configuration:         configuration,
 		containerEngineClient: containerClient,
@@ -1543,5 +1552,16 @@ func newTokenSigner(requestSigner common.HTTPRequestSigner, interceptor common.R
 		}
 
 		return r, nil
+	}
+}
+
+func configureClient(httpClient *http.Client) {
+	httpClient.Transport = &http.Transport{
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		Proxy:               http.ProxyFromEnvironment,
 	}
 }
