@@ -345,6 +345,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The OCID of the compartment in which to create resrouces (VCN, worker nodes, etc.)",
 	}
+	driverFlag.Options["vcn-compartment-id"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The OCID of the compartment in which to find existing VCN exists with the specified name",
+	}
 	driverFlag.Options["vcn-name"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The name of an existing virtual network to be used for OKE cluster creation",
@@ -499,7 +503,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		state.NodePool.QuantityPerSubnet = defaultNumNodes
 	}
 
-	if state.Network.VcnCompartmentID == "" {
+	if state.Network.VcnCompartmentID == "" && state.Network.VCNName == "" {
 		state.Network.VcnCompartmentID = state.CompartmentID
 	}
 
