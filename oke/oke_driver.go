@@ -503,7 +503,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		state.NodePool.QuantityPerSubnet = defaultNumNodes
 	}
 
-	if state.Network.VcnCompartmentID == "" && state.Network.VCNName == "" {
+	if state.Network.VcnCompartmentID == "" {
 		state.Network.VcnCompartmentID = state.CompartmentID
 	}
 
