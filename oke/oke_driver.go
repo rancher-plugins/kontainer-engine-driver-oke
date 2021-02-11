@@ -479,6 +479,10 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		ServiceSubnetDnsDomainName:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-subnet-dns-domain-name", "serviceSubnetDnsDomainName").(string),
 	}
 
+	if state.Network.VCNName != "" {
+		state.SkipVCNDelete = true
+	}
+
 	if state.Network.NodePoolSubnetName == "" {
 		state.Network.NodePoolSubnetName = nodeSubnetName
 	}
