@@ -33,8 +33,8 @@ github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd/go.mod h1:6dJ
 github.com/modern-go/reflect2 v0.0.0-20180701023420-4b7aa43c6742/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
 github.com/modern-go/reflect2 v1.0.1 h1:9f412s+6RmYXLWZSEzVVgPGK7C2PphHj5RJrvfx9AWI=
 github.com/modern-go/reflect2 v1.0.1/go.mod h1:bx2lNnkwVCuqBIxFjflWJWanXIb3RllmbCylyMrvgv0=
-github.com/oracle/oci-go-sdk/v27 v27.1.0 h1:e/ib4GeJ8k6TNfgDXaAE2m9rlgdBV9qAN3e5+u8xsBE=
-github.com/oracle/oci-go-sdk/v27 v27.1.0/go.mod h1:TeoXZiKSPNKbPqxykLnSLkdPXK9mY9cR6HIkBJVyi34=
+github.com/oracle/oci-go-sdk/v38 v38.0.0 h1:KsMs31nJveYAF8xoG232ZsyeENxl3KjP4rnkezE9UrU=
+github.com/oracle/oci-go-sdk/v38 v38.0.0/go.mod h1:IHq3NEgVwmhtTLntyD7wfW9sISbwKnqTztPwePD2o+4=
 github.com/pkg/errors v0.8.1 h1:iURUrRGxPUNPdy5/HRSm+Yj6okJ6UtLINN0Q9M4+h3I=
 github.com/pkg/errors v0.8.1/go.mod h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
