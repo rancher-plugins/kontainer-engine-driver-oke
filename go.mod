@@ -9,7 +9,7 @@ require (
 	github.com/json-iterator/go v1.1.7 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.1 // indirect
-	github.com/oracle/oci-go-sdk/v27 v27.1.0
+	github.com/oracle/oci-go-sdk/v38 v38.0.0
 	github.com/pkg/errors v0.8.1
 	github.com/rancher/kontainer-engine v0.0.0-20190711161432-b98bad2201bb
 	github.com/rancher/rke v0.2.8 // indirect
