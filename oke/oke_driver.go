@@ -626,19 +626,31 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 			serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet2Id)
 		}
 
-		// First, get all the subnet Ids in the VCN, then remove the service subnets which should leave the node subnets
-		nodeSubnetIds, _ = oke.ListSubnetIdsInVcn(ctx, state.Network.VcnCompartmentID, vcnID)
-		for _, serviceSubnetID := range serviceSubnetIDs {
-			for i, vcnSubnetID := range nodeSubnetIds {
-				if serviceSubnetID == vcnSubnetID {
-					nodeSubnetIds = remove(nodeSubnetIds, i)
+		// A node pool subnet net was explicitly passed in
+		if len(state.Network.NodePoolSubnetName) > 0 {
+			nodeSubnetId, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
+			if err != nil {
+				logrus.Debugf("error looking up the Id of a Kubernetes node Subnet %s %v", state.Network.NodePoolSubnetName, err)
+				return clusterInfo, err
+			}
+			nodeSubnetIds = append(nodeSubnetIds, nodeSubnetId)
+		} else {
+			// Attempt to deduce node pool subnet
+
+			// First, get all the subnet Ids in the VCN, then remove the service subnets which should leave the node subnets
+			nodeSubnetIds, _ = oke.ListSubnetIdsInVcn(ctx, state.Network.VcnCompartmentID, vcnID)
+			for _, serviceSubnetID := range serviceSubnetIDs {
+				for i, vcnSubnetID := range nodeSubnetIds {
+					if serviceSubnetID == vcnSubnetID {
+						nodeSubnetIds = remove(nodeSubnetIds, i)
+					}
 				}
 			}
-		}
 
-		// When using an existing VCN, we require at least one subnet (preferably regional) for node pool.
-		if len(nodeSubnetIds) < 1 {
-			return clusterInfo, fmt.Errorf("VCN must have at least 1 node subnet for node pool")
+			// When using an existing VCN, we require at least one subnet (preferably regional) for node pool.
+			if len(nodeSubnetIds) < 1 {
+				return clusterInfo, fmt.Errorf("VCN must have at least 1 node subnet for node pool")
+			}
 		}
 
 		state.Network.QuantityOfSubnets = int64(len(nodeSubnetIds))
