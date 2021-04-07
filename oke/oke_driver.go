@@ -151,6 +151,8 @@ type NodeConfiguration struct {
 	NodePublicSSHKeyContents string
 	// The number of nodes in each subnet / availability domain
 	QuantityPerSubnet int64
+	// Optional limit on the number of nodes in the pool. Default 0.
+	LimitNodeCount int64
 	// The optional custom boot volume size to use for the nodes
 	CustomBootVolumeSize int64
 	// The optional number of OCPUs for each node (each OCPU is equivalent to one physical core of an Intel Xeon processor)
@@ -325,6 +327,13 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 			DefaultInt: 1,
 		},
 	}
+	driverFlag.Options["limit-node-count"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "Optional limit on the number of nodes in the pool. Default 0.",
+		Default: &types.Default{
+			DefaultInt: 0,
+		},
+	}
 	driverFlag.Options["wait-nodes-active"] = &types.Flag{
 		Type:  types.IntType,
 		Usage: "Whether to wait for the nodes to reach READY state before moving on",
@@ -464,6 +473,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		NodePublicSSHKeyPath:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-path", "nodePublicKeyPath").(string),
 		NodePublicSSHKeyContents: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-contents", "nodePublicKeyContents").(string),
 		QuantityPerSubnet:        options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-per-subnet", "quantityPerSubnet").(int64),
+		LimitNodeCount:           options.GetValueFromDriverOptions(driverOptions, types.IntType, "limit-node-count", "limitNodeCount").(int64),
 	}
 
 	state.Network = NetworkConfiguration{
@@ -590,7 +600,13 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	if state.Network.VCNName == "" {
 		// Create a new Virtual Cloud Network with the default number of subnets
 		state.Network.VCNName = defaultVCNNamePrefix + state.Name
-		state.Network.ServiceLBSubnet1Name = defaultServiceSubnetPrefix + state.Name
+
+		if state.Network.ServiceLBSubnet1Name == "" {
+			state.Network.ServiceLBSubnet1Name = defaultServiceSubnetPrefix + state.Name
+		}
+		if state.Network.NodePoolSubnetName == "" {
+			state.Network.NodePoolSubnetName = nodeSubnetName
+		}
 		state.Network.QuantityOfSubnets = 1
 
 		logrus.Infof("Creating a new VCN and required network resources for OKE cluster %s", state.Name)
@@ -626,18 +642,14 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 			serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet2Id)
 		}
 
-		// A node pool subnet net was explicitly passed in
-		if len(state.Network.NodePoolSubnetName) > 0 {
-			nodeSubnetId, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
-			if err != nil {
+		nodeSubnetId, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
+		if err != nil {
+			// A node pool subnet net was explicitly passed in, so error out if it is not found.
+			if state.Network.NodePoolSubnetName != nodeSubnetName {
 				logrus.Debugf("error looking up the Id of a Kubernetes node Subnet %s %v", state.Network.NodePoolSubnetName, err)
 				return clusterInfo, err
 			}
-			nodeSubnetIds = append(nodeSubnetIds, nodeSubnetId)
-		} else {
-			// Attempt to deduce node pool subnet
-
-			// First, get all the subnet Ids in the VCN, then remove the service subnets which should leave the node subnets
+			// Node pool subnet net was not passed in, attempt to deduce it
 			nodeSubnetIds, _ = oke.ListSubnetIdsInVcn(ctx, state.Network.VcnCompartmentID, vcnID)
 			for _, serviceSubnetID := range serviceSubnetIDs {
 				for i, vcnSubnetID := range nodeSubnetIds {
@@ -646,15 +658,28 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 					}
 				}
 			}
-
-			// When using an existing VCN, we require at least one subnet (preferably regional) for node pool.
-			if len(nodeSubnetIds) < 1 {
-				return clusterInfo, fmt.Errorf("VCN must have at least 1 node subnet for node pool")
+			// We can only be reasonably assured if we've found a single match.
+			if len(nodeSubnetIds) != 1 {
+				// User needs to disambiguate.
+				return clusterInfo, fmt.Errorf("cannot determine node subnet ID, please set --node-pool-subnet-name")
 			}
+		} else {
+			nodeSubnetIds = append(nodeSubnetIds, nodeSubnetId)
 		}
-
-		state.Network.QuantityOfSubnets = int64(len(nodeSubnetIds))
 	}
+
+	for _, nextNodeSubnetId := range nodeSubnetIds {
+		nextNodeSubnet, err := oke.GetSubnetById(ctx, nextNodeSubnetId)
+		if err != nil {
+			logrus.Debugf("error fetching node subnet %v", err)
+			return clusterInfo, err
+		}
+		if *nextNodeSubnet.ProhibitPublicIpOnVnic != state.PrivateNodes {
+			return nil, errors.Wrap(err, "please provide a private subnet for private nodes and a public subnet for public nodes")
+		}
+	}
+
+	state.Network.QuantityOfSubnets = int64(len(nodeSubnetIds))
 
 	clusterID, err := oke.GetClusterByName(ctx, state.CompartmentID, state.Name)
 	if err == nil && len(clusterID) > 0 {
@@ -692,9 +717,14 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 // Update implements driver interface
 func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *types.DriverOptions) (*types.ClusterInfo, error) {
 	logrus.Debugf("oke.driver.Update(...) called")
+
 	state, err := GetState(info)
 	if err != nil {
 		return nil, err
+	}
+	oke, err := constructClusterManagerClient(ctx, state)
+	if err != nil {
+		return nil, errors.Wrap(err, "could not get Oracle Container Engine client")
 	}
 
 	newState, err := GetStateFromOpts(opts)
@@ -702,9 +732,10 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 		return nil, err
 	}
 
-	if newState.NodePool.QuantityPerSubnet != state.NodePool.QuantityPerSubnet {
-		logrus.Infof("Updating quantity of nodes per availability-domain to %d", uint64(newState.NodePool.QuantityPerSubnet))
-		err = d.SetClusterSize(ctx, info, &types.NodeCount{Count: int64(newState.NodePool.QuantityPerSubnet) * int64(state.Network.QuantityOfSubnets)})
+	if limitN(int(newState.NodePool.QuantityPerSubnet), int(newState.NodePool.LimitNodeCount)) !=
+		limitN(int(state.NodePool.QuantityPerSubnet), int(state.NodePool.LimitNodeCount)) {
+		logrus.Infof("Updating quantity of nodes in the node-pool to %d", limitN(int(newState.NodePool.QuantityPerSubnet*int64(oke.numADs(ctx, state.CompartmentID))), int(newState.NodePool.LimitNodeCount)))
+		err = d.SetClusterSize(ctx, info, &types.NodeCount{Count: int64(limitN(int(newState.NodePool.QuantityPerSubnet*int64(oke.numADs(ctx, state.CompartmentID))), int(newState.NodePool.LimitNodeCount)))})
 		if err != nil {
 			return nil, err
 		}
@@ -751,7 +782,7 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 	info.Password = ""
 	info.ClientCertificate = ""
 	info.ClientKey = ""
-	info.NodeCount = state.NodePool.QuantityPerSubnet * state.Network.QuantityOfSubnets
+	info.NodeCount = state.NodePool.QuantityPerSubnet * int64(oke.numADs(ctx, state.CompartmentID))
 	info.Metadata["nodePool"] = state.Name + "-1"
 	if len(kubeConfig.Clusters) > 0 {
 		info.RootCaCertificate = kubeConfig.Clusters[0].Cluster.CertificateAuthorityData
@@ -866,23 +897,13 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 		return errors.Wrap(err, "could not get Oracle Container Engine client")
 	}
 
-	logrus.Infof("Updating the number of nodes in each availability domain to %d", count.Count)
+	logrus.Infof("Updating the number of nodes in the node-pool to %d", count.Count)
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
 		return errors.Wrap(err, "could not retrieve node pool id")
 	}
 	if len(nodePoolIds) <= 0 {
 		return fmt.Errorf("could not retrieve node pool id")
-	}
-
-	// Assuming a single node pool
-	nodePool, err := oke.GetNodePoolByID(ctx, nodePoolIds[0])
-	if err != nil {
-		return errors.Wrap(err, "could not retrieve node pool")
-	}
-	if int64(*nodePool.QuantityPerSubnet) == count.Count {
-		logrus.Infof("OKE cluster size is already %d (i.e. %d node(s) per availability-domain)", uint64(count.Count), count.Count)
-		return nil
 	}
 
 	err = oke.ScaleNodePool(ctx, nodePoolIds[0], int(count.Count), state.CompartmentID)
