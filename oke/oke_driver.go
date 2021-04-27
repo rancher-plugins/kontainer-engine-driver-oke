@@ -451,7 +451,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.Description = options.GetValueFromDriverOptions(driverOptions, types.StringType, "description").(string)
 	state.EnableKubernetesDashboard = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-kubernetes-dashboard", "enableKubernetesDashboard").(bool)
 	state.EnableTiller = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-tiller", "enableTiller").(bool)
-	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVCNDelete").(bool)
+	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVcnDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
 	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesVersion").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
