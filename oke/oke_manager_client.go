@@ -266,7 +266,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	}
 	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
 		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(ads.Items)),
-		Size:             common.Int(int(state.NodePool.QuantityPerSubnet) * len(ads.Items)),
+		Size:             common.Int(limitN(int(state.NodePool.QuantityPerSubnet)*len(ads.Items), int(state.NodePool.LimitNodeCount))),
 	}
 
 	// Match up subnet(s) to availability domains
@@ -381,24 +381,17 @@ func (mgr *ClusterManagerClient) GetNodePoolByID(ctx context.Context, nodePoolID
 	return resp.NodePool, nil
 }
 
-// ScaleNodePool updates the number of nodes in each availability-domain, or an error.
-func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID string, quantityPerAD int, compartmentID string) error {
-	logrus.Debugf("scaling node pool %s to %d nodes per availability-domain", nodePoolID, quantityPerAD)
-
-	req := identity.ListAvailabilityDomainsRequest{}
-	req.CompartmentId = &compartmentID
-	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
-	if err != nil {
-		return err
-	}
+// ScaleNodePool updates the number of nodes in the node pool, or an error.
+func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID string, numNodes int, compartmentID string) error {
+	logrus.Debugf("scaling node pool %s to %d nodes", nodePoolID, numNodes)
 
 	npReq := containerengine.UpdateNodePoolRequest{}
 	npReq.NodePoolId = common.String(nodePoolID)
 	npReq.NodeConfigDetails = &containerengine.UpdateNodePoolNodeConfigDetails{
-		Size: common.Int(len(ads.Items) * quantityPerAD),
+		Size: common.Int(numNodes),
 	}
 
-	_, err = mgr.containerEngineClient.UpdateNodePool(ctx, npReq)
+	_, err := mgr.containerEngineClient.UpdateNodePool(ctx, npReq)
 	if err != nil {
 		logrus.Debugf("scale node pool request failed with err %v", err)
 		return err
@@ -546,7 +539,7 @@ func (mgr *ClusterManagerClient) GetSubnetIDByName(ctx context.Context, compartm
 	return *subnet.Id, err
 }
 
-// GetSubnetIDByName returns the subnet with the specified name in the specified
+// GetSubnetByName returns the subnet with the specified name in the specified
 // VCN and compartment, or an error if it is not found.
 func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmentID, vcnID, displayName string) (core.Subnet, error) {
 	logrus.Debugf("getting subnet with name %s", displayName)
@@ -576,6 +569,28 @@ func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmen
 	}
 
 	return subnet, fmt.Errorf("%s not found", displayName)
+}
+
+// GetSubnetById returns the subnet with the specified id, or an error if it is not found.
+func (mgr *ClusterManagerClient) GetSubnetById(ctx context.Context, subnetId string) (core.Subnet, error) {
+	logrus.Debugf("getting subnet with ID %s", subnetId)
+
+	subnet := core.Subnet{}
+
+	if len(subnetId) == 0 {
+		return subnet, fmt.Errorf("subnetId must be set to get the subnet")
+	}
+
+	getSubnetsReq := core.GetSubnetRequest{}
+	getSubnetsReq.SubnetId = common.String(subnetId)
+
+	getSubnetResp, err := mgr.virtualNetworkClient.GetSubnet(ctx, getSubnetsReq)
+	if err != nil {
+		logrus.Debugf("list subnets failed with err %v", err)
+		return subnet, err
+	}
+
+	return getSubnetResp.Subnet, nil
 }
 
 // ListSubnetIdsInVcn returns the subnet IDs of any and all subnets in the
@@ -1476,6 +1491,26 @@ func waitUntilWorkRequestComplete(client containerengine.ContainerEngineClient, 
 	}
 
 	return getResp, nil
+}
+
+// limitN returns n if n is less than a non-zero limit, or the limit l if n is greater.
+func limitN(n, l int) int {
+	if l > 0 && n > l {
+		return l
+	}
+	return n
+}
+
+// numADs returns the number of availability domains in the current context.
+func (mgr *ClusterManagerClient) numADs(ctx context.Context, compartmentID string) int {
+
+	req := identity.ListAvailabilityDomainsRequest{}
+	req.CompartmentId = &compartmentID
+	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
+	if err != nil {
+		return 0
+	}
+	return len(ads.Items)
 }
 
 func getDefaultKubernetesVersion(client containerengine.ContainerEngineClient) (*string, error) {
