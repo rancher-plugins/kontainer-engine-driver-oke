@@ -40,17 +40,20 @@ import (
 
 const (
 	// TODO VCN block only needs to be large enough for the subnets below
-	vcnCIDRBlock                   = "10.0.0.0/16"
-	nodeCIDRBlock                  = "10.0.10.0/24"
-	bastionCIDRBlock               = "10.0.16.0/24"
-	serviceCIDRBlock               = "10.0.20.0/24"
-	podCIDRBlock                   = "10.244.0.0/16"
-	servicesCIDRBlock              = "10.96.0.0/16"
-	nodeSubnetName                 = "nodedns"
-	serviceSubnetName              = "svcdns"
-	bastionSubnetName              = "bastion"
-	nodePoolSubnetSecurityListName = "Node Security List"
-	serviceSubnetSecurityListName  = "Service Security List"
+	vcnCIDRBlock                       = "10.0.0.0/16"
+	controlPlaneCIDRBlock              = "10.0.0.0/28"
+	nodeCIDRBlock                      = "10.0.10.0/24"
+	bastionCIDRBlock                   = "10.0.16.0/24"
+	serviceCIDRBlock                   = "10.0.20.0/24"
+	podCIDRBlock                       = "10.244.0.0/16"
+	servicesCIDRBlock                  = "10.96.0.0/16"
+	controlPlaneSubnetName             = "k8sendpoint"
+	nodeSubnetName                     = "nodedns"
+	serviceSubnetName                  = "svclbsubnet"
+	bastionSubnetName                  = "bastionsubnet"
+	controlPlaneSubnetSecurityListName = "oke-k8sapiendpointseclist"
+	nodePoolSubnetSecurityListName     = "oke-nodeseclist"
+	serviceSubnetSecurityListName      = "oke-svclbseclist"
 )
 
 // Defines / contains the OCI/OKE/Identity clients and operations.
@@ -102,7 +105,7 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 // CreateCluster creates a new cluster with no initial node pool and attaches
 // it to the existing network resources, or an error.
 // TODO stop passing in state
-func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State, vcnID string, serviceSubnetIds, nodeSubnetIds []string) error {
+func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State, vcnID string, controlPlaneSubnetID string, serviceSubnetIds, nodeSubnetIds []string) error {
 	if state == nil {
 		return fmt.Errorf("valid state is required")
 	}
@@ -133,6 +136,12 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 			PodsCidr:     common.String(state.Network.PodCidr),
 			ServicesCidr: common.String(state.Network.ServiceCidr),
 		},
+	}
+	if len(controlPlaneSubnetID) > 0 {
+		cReq.EndpointConfig = &containerengine.CreateClusterEndpointConfigDetails{
+			SubnetId:          common.String(controlPlaneSubnetID),
+			IsPublicIpEnabled: negate(state.PrivateControlPlane),
+		}
 	}
 
 	clusterResp, err := mgr.containerEngineClient.CreateCluster(ctx, cReq)
@@ -980,6 +989,26 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 		}
 	}
 
+	// Delete Service Gateway(s) from VCN
+	listSGsReq := core.ListServiceGatewaysRequest{}
+	listSGsReq.VcnId = common.String(vcnID)
+	listSGsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
+	sgResp, err := mgr.virtualNetworkClient.ListServiceGateways(ctx, listSGsReq)
+	if err != nil {
+		logrus.Debugf("list Service gateway(s) failed with err %v", err)
+		return err
+	}
+	for _, sg := range sgResp.Items {
+		deleteSGReq := core.DeleteServiceGatewayRequest{}
+		deleteSGReq.ServiceGatewayId = sg.Id
+		logrus.Debugf("deleting Service gateway %s", *sg.Id)
+		_, err = mgr.virtualNetworkClient.DeleteServiceGateway(ctx, deleteSGReq)
+		if err != nil {
+			logrus.Debugf("warning: delete Service gateway failed with err %v", err)
+			// Continue tearing down.
+		}
+	}
+
 	// Finally, delete the VCN itself
 	vcnRequest := core.DeleteVcnRequest{}
 	vcnRequest.VcnId = common.String(vcnID)
@@ -1077,6 +1106,45 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 	subnetIds = append(subnetIds, *subnet1.Id)
 
 	return subnetIds, nil
+}
+
+// CreateControlPlaneSubnet creates (public or private) regional subnet for the k8s control-plane, or an error.
+func (mgr *ClusterManagerClient) CreateControlPlaneSubnet(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) (string, error) {
+
+	if isPrivate {
+		logrus.Debugf("creating private regional control-plane subnet in VCN ID %s", vcnID)
+	} else {
+		logrus.Debugf("creating public regional control-plane subnet in VCN ID %s", vcnID)
+	}
+
+	var subnetId = ""
+	if state == nil {
+		return "", fmt.Errorf("valid state is required")
+	}
+
+	// create a subnet in different availability domain
+	req := identity.ListAvailabilityDomainsRequest{}
+	req.CompartmentId = &state.CompartmentID
+
+	var routeId *string = nil
+	if len(subnetRouteID) > 0 {
+		routeId = common.String(subnetRouteID)
+	}
+
+	// Create regional subnet
+	subnet1, err := mgr.CreateSubnetWithDetails(
+		common.String(controlPlaneSubnetName),
+		common.String(controlPlaneCIDRBlock),
+		common.String(controlPlaneSubnetName),
+		nil,
+		common.String(vcnID), routeId, isPrivate, securityListIds, state)
+	if err != nil {
+		logrus.Debugf("create new control-plane subnet failed with err %v", err)
+		return subnetId, err
+	}
+	subnetId = *subnet1.Id
+
+	return subnetId, nil
 }
 
 // CreateServiceSubnets creates the regional (public) service subnet (i.e. load balancer
@@ -1201,11 +1269,11 @@ func (mgr *ClusterManagerClient) CreateSubnetWithDetails(displayName *string, ci
 // CreateVCNAndNetworkResources creates a new Virtual Cloud Network and
 // required resources including security lists, Internet Gateway, default route
 // rule, etc., or an error.
-func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (string, []string, []string, error) {
+func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (string, string, []string, []string, error) {
 
 	logrus.Debugf("create virtual cloud network called.")
 	if state == nil {
-		return "", nil, nil, fmt.Errorf("valid state is required")
+		return "", "", nil, nil, fmt.Errorf("valid state is required")
 	}
 
 	ctx := context.Background()
@@ -1221,7 +1289,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	r, err := mgr.virtualNetworkClient.CreateVcn(ctx, vcnRequest)
 	if err != nil {
 		logrus.Debugf("create virtual-network request failed with err %v", err)
-		return "", nil, nil, err
+		return "", "", nil, nil, err
 	}
 	// TODO better to poll instead of sleep
 	time.Sleep(mgr.sleepDuration * time.Second)
@@ -1233,7 +1301,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 			CompartmentId: &state.CompartmentID,
 			VcnId:         r.Vcn.Id,
 			IsEnabled:     &trueVar,
-			DisplayName:   common.String("igateway"),
+			DisplayName:   common.String("oke-igw"),
 		}}
 
 	igResp, err := mgr.virtualNetworkClient.CreateInternetGateway(ctx, internetGatewayReq)
@@ -1245,13 +1313,15 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	routeTablesResp, err := mgr.virtualNetworkClient.ListRouteTables(ctx, routeTablesReq)
 	if err != nil {
 		logrus.Debugf("list route tables request failed with err %v", err)
-		return "", nil, nil, err
+		return "", "", nil, nil, err
 	}
 	if len(routeTablesResp.Items) != 1 {
-		return "", nil, nil, fmt.Errorf("cannot find default route rule for the VCN")
+		return "", "", nil, nil, fmt.Errorf("cannot find default route rule for the VCN")
 	}
 
-	subnetRouteID := routeTablesResp.Items[0].Id
+	// Default route by default
+	nodeSubnetRouteID := routeTablesResp.Items[0].Id
+	controlPlaneRouteID := routeTablesResp.Items[0].Id
 
 	// Add a route rule in the route table that directs internet-bound traffic
 	// to the internet gateway created above.
@@ -1259,27 +1329,49 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	updateRouteTableReq.RtId = routeTablesResp.Items[0].Id
 	updateRouteTableReq.DisplayName = routeTablesResp.Items[0].DisplayName
 	updateRouteTableReq.RouteRules = append(updateRouteTableReq.RouteRules, core.RouteRule{Destination: common.String("0.0.0.0/0"), NetworkEntityId: igResp.InternetGateway.Id})
+
 	_, err = mgr.virtualNetworkClient.UpdateRouteTable(ctx, updateRouteTableReq)
 	if err != nil {
 		logrus.Debugf("update route table request failed with err %v", err)
-		return "", nil, nil, err
+		return "", "", nil, nil, err
 	}
 
-	if state.PrivateNodes {
+	if state.PrivateControlPlane || state.PrivateNodes {
 
-		// Private nodes require private subnets, a NAT gateway, and a Security
-		// list for the bastion instance.
-
-		// Prepare the NAT gateway and route rule for private clusters
+		// Create a NAT and service gateways, as well as route rules to direct desired traffic from corresponding private subnets
 		natGatewayReq := core.CreateNatGatewayRequest{
 			CreateNatGatewayDetails: core.CreateNatGatewayDetails{
 				CompartmentId: &state.CompartmentID,
 				VcnId:         r.Vcn.Id,
-				DisplayName:   common.String("NAT-Gateway"),
+				DisplayName:   common.String("oke-ngw"),
 				BlockTraffic:  nil,
 			},
 		}
 		ngResp, err := mgr.virtualNetworkClient.CreateNatGateway(ctx, natGatewayReq)
+		helpers.FatalIfError(err)
+
+		// Create a Service gateway
+		var allServices *core.Service
+		listResponse, err := mgr.virtualNetworkClient.ListServices(ctx, core.ListServicesRequest{})
+		for _, service := range listResponse.Items {
+			if strings.HasSuffix(*service.Name, "Services In Oracle Services Network") {
+				allServices = &service
+				break
+			}
+		}
+		if allServices == nil {
+			logrus.Debug("failed to retrieve Oracle Services Network")
+			return "", "", nil, nil, err
+		}
+		serviceGatewayReq := core.CreateServiceGatewayRequest{
+			CreateServiceGatewayDetails: core.CreateServiceGatewayDetails{
+				CompartmentId: &state.CompartmentID,
+				VcnId:         r.Vcn.Id,
+				Services:      []core.ServiceIdRequestDetails{core.ServiceIdRequestDetails{ServiceId: allServices.Id}},
+				DisplayName:   common.String("oke-svcgw"),
+			}}
+
+		svcGatewayResp, err := mgr.virtualNetworkClient.CreateServiceGateway(ctx, serviceGatewayReq)
 		helpers.FatalIfError(err)
 
 		natRules := []core.RouteRule{
@@ -1287,40 +1379,80 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 				Destination:     common.String("0.0.0.0/0"),
 				NetworkEntityId: ngResp.NatGateway.Id,
 			},
+			{
+				Destination:     allServices.CidrBlock,
+				DestinationType: core.RouteRuleDestinationTypeServiceCidrBlock,
+				NetworkEntityId: svcGatewayResp.Id,
+			},
 		}
 
 		createRouteTableReq := core.CreateRouteTableRequest{}
-		// Add a route rule in the route table that directs internet-bound
-		// traffic to the NAT gateway created above.
-		createRouteTableReq.DisplayName = common.String("nat-gateway_route")
+		// Add a route rule in the route table that directs service traffic to the service gateway and internet-bound
+		// traffic to the NAT gateway.
+		createRouteTableReq.DisplayName = common.String("oke-private-routetable")
 		createRouteTableReq.RouteRules = append(natRules)
 		createRouteTableReq.CompartmentId = &state.CompartmentID
 		createRouteTableReq.VcnId = r.Vcn.Id
-		createRouteTablesResp, err := mgr.virtualNetworkClient.CreateRouteTable(ctx, createRouteTableReq)
+
+		createPrivateRouteTablesResp, err := mgr.virtualNetworkClient.CreateRouteTable(ctx, createRouteTableReq)
 		helpers.FatalIfError(err)
 
-		// subnet's route table should point to the NAT
-		subnetRouteID = createRouteTablesResp.Id
+		if state.PrivateNodes {
+			// Private route for worker subnet
+			nodeSubnetRouteID = createPrivateRouteTablesResp.Id
+		}
 
-		bastionSecList := core.CreateSecurityListRequest{
-			CreateSecurityListDetails: core.CreateSecurityListDetails{
-				CompartmentId:        &state.CompartmentID,
-				DisplayName:          common.String("Bastion Security List"),
-				EgressSecurityRules:  []core.EgressSecurityRule{},
-				IngressSecurityRules: []core.IngressSecurityRule{},
-				VcnId:                r.Vcn.Id}}
+		if state.PrivateControlPlane {
+			// Private route for control plane subnet
+			controlPlaneRouteID = createPrivateRouteTablesResp.Id
 
-		bastionSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, bastionSecList)
-		helpers.FatalIfError(err)
+			// Create a bastion subnet to access k8s API
+			bastionSecList := core.CreateSecurityListRequest{
+				CreateSecurityListDetails: core.CreateSecurityListDetails{
+					CompartmentId:        &state.CompartmentID,
+					DisplayName:          common.String("Bastion Security List"),
+					EgressSecurityRules:  []core.EgressSecurityRule{},
+					IngressSecurityRules: []core.IngressSecurityRule{},
+					VcnId:                r.Vcn.Id}}
 
-		_, err = mgr.CreateBastionSubnets(ctx, state, *r.Vcn.Id, "", false, []string{*bastionSecListResp.SecurityList.Id})
-		helpers.FatalIfError(err)
+			// Allow internal traffic from VCN to the bastion by default
+			bastionSecList.IngressSecurityRules = append(bastionSecList.IngressSecurityRules, core.IngressSecurityRule{
+				Protocol: common.String("all"),
+				Source:   common.String(vcnCIDRBlock),
+			})
+			// Allow internal traffic from NAT gateway to the bastion by default
+			bastionSecList.IngressSecurityRules = append(bastionSecList.IngressSecurityRules, core.IngressSecurityRule{
+				Protocol: common.String("all"),
+				Source:   ngResp.NatIp,
+			})
+
+			// Allow outgoing traffic to VCN from the bastion by default
+			bastionSecList.EgressSecurityRules = append(bastionSecList.EgressSecurityRules, core.EgressSecurityRule{
+				Protocol:    common.String("all"),
+				Destination: common.String(vcnCIDRBlock),
+			})
+
+			bastionSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, bastionSecList)
+			helpers.FatalIfError(err)
+
+			_, err = mgr.CreateBastionSubnets(ctx, state, *r.Vcn.Id, "", false, []string{*bastionSecListResp.SecurityList.Id})
+			helpers.FatalIfError(err)
+
+			// User must configure bastion Ingress and any additional egress besides VCN CIDR
+			logrus.Info("Bastion subnet created. A bastion host and security rules must be configured manually.")
+		}
 	}
+
+	// Create the control-plane security list
+	controlPlaneSecurityListIds, err := mgr.CreateControlPlaneSecurityList(ctx, state, r.Vcn.Id, nodeCIDRBlock, serviceCIDRBlock, controlPlaneSubnetSecurityListName)
+
+	controlPlaneSubnetId, err := mgr.CreateControlPlaneSubnet(ctx, state, *r.Vcn.Id, *controlPlaneRouteID, state.PrivateControlPlane, controlPlaneSecurityListIds)
+	helpers.FatalIfError(err)
 
 	// Create the node security list
 	nodeSecurityListIds, err := mgr.CreateNodeSecurityList(ctx, state, r.Vcn.Id, nodeCIDRBlock, serviceCIDRBlock, state.Network.NodePoolSubnetSecurityListName)
 
-	nodeSubnet, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *subnetRouteID, state.PrivateNodes, nodeSecurityListIds)
+	nodeSubnet, err := mgr.CreateNodeSubnets(ctx, state, *r.Vcn.Id, *nodeSubnetRouteID, state.PrivateNodes, nodeSecurityListIds)
 	helpers.FatalIfError(err)
 
 	serviceSecurityListIds, err := mgr.CreateServiceSecurityList(ctx, state, r.Vcn.Id, state.Network.ServiceSubnetSecurityListName)
@@ -1328,7 +1460,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	serviceSubnet, err := mgr.CreateServiceSubnets(ctx, state, *r.Vcn.Id, "", false, serviceSecurityListIds)
 	helpers.FatalIfError(err)
 
-	return *r.Vcn.Id, serviceSubnet, nodeSubnet, nil
+	return *r.Vcn.Id, controlPlaneSubnetId, serviceSubnet, nodeSubnet, nil
 }
 
 // Create the node security list
@@ -1396,14 +1528,157 @@ func (mgr *ClusterManagerClient) CreateNodeSecurityList(ctx context.Context, sta
 		})
 	}
 
-	// TODO consider enabling 0.0.0.0/0 ICMP for nodes to receive Path MTU
-	//  Discovery fragmentation messages.
+	// Allow ICMP traffic from worker nodes for path discovery
+	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol:    common.String("1"),
+		Description: common.String("Path discovery"),
+		Source:      common.String("0.0.0.0/0"),
+		IcmpOptions: &core.IcmpOptions{
+			Code: common.Int(4),
+			Type: common.Int(3),
+		},
+		IsStateless: common.Bool(false),
+	})
 	// TODO we could also create a service gateway and corresponding route rule.
 
 	nodeSecListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, nodeSecList)
 	helpers.FatalIfError(err)
 
 	return []string{*nodeSecListResp.SecurityList.Id}, nil
+}
+
+// Create the control-plane security list
+func (mgr *ClusterManagerClient) CreateControlPlaneSecurityList(ctx context.Context, state *State, vcnId *string, nodeCidrBlock string, serviceCidrBlock string, name string) ([]string, error) {
+
+	ctrlSecurityList := core.CreateSecurityListRequest{
+		CreateSecurityListDetails: core.CreateSecurityListDetails{
+			CompartmentId:        &state.CompartmentID,
+			DisplayName:          common.String(name),
+			EgressSecurityRules:  []core.EgressSecurityRule{},
+			IngressSecurityRules: []core.IngressSecurityRule{},
+			VcnId:                vcnId}}
+
+	ctrlSecurityList.IngressSecurityRules = append(ctrlSecurityList.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol:    common.String("6"), // TCP
+		Source:      common.String(nodeCidrBlock),
+		Description: common.String("Kubernetes worker to Kubernetes API endpoint communication"),
+		TcpOptions: &core.TcpOptions{
+			DestinationPortRange: &core.PortRange{
+				Max: common.Int(6443),
+				Min: common.Int(6443),
+			},
+		},
+	})
+	// Allow ICMP traffic from worker nodes for path discovery
+	ctrlSecurityList.IngressSecurityRules = append(ctrlSecurityList.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol:    common.String("1"),
+		Description: common.String("Path discovery"),
+		Source:      common.String(nodeCidrBlock),
+		IcmpOptions: &core.IcmpOptions{
+			Code: common.Int(4),
+			Type: common.Int(3),
+		},
+		IsStateless: common.Bool(false),
+	})
+	if !state.PrivateControlPlane {
+		// Open up access to Kubernetes API endpoint if not private
+		ctrlSecurityList.IngressSecurityRules = append(ctrlSecurityList.IngressSecurityRules, core.IngressSecurityRule{
+			Protocol:    common.String("6"), // TCP
+			Source:      common.String("0.0.0.0/0"),
+			Description: common.String("External access to Kubernetes API endpoint"),
+			TcpOptions: &core.TcpOptions{
+				DestinationPortRange: &core.PortRange{
+					Max: common.Int(6443),
+					Min: common.Int(6443),
+				},
+			},
+			IsStateless: common.Bool(false),
+		})
+	}
+	if state.PrivateNodes {
+		// Allow selected access to and from the bastion subnet by default
+		ctrlSecurityList.IngressSecurityRules = append(ctrlSecurityList.IngressSecurityRules, core.IngressSecurityRule{
+			Protocol:    common.String("6"), // TCP
+			Source:      common.String(bastionCIDRBlock),
+			Description: common.String("Bastion to Kubernetes API endpoint communication"),
+			TcpOptions: &core.TcpOptions{
+				DestinationPortRange: &core.PortRange{
+					Max: common.Int(6443),
+					Min: common.Int(6443),
+				},
+			},
+			IsStateless: common.Bool(false),
+		})
+		// Default egress rule to allow outbound traffic to bastion
+		ctrlSecurityList.EgressSecurityRules = append(ctrlSecurityList.EgressSecurityRules, core.EgressSecurityRule{
+			Protocol:    common.String("6"), // TCP
+			Destination: common.String(bastionCIDRBlock),
+			Description: common.String("All traffic to bastion"),
+			IsStateless: common.Bool(false),
+		})
+	}
+
+	ctrlSecurityList.IngressSecurityRules = append(ctrlSecurityList.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol:    common.String("6"), // TCP
+		Source:      common.String(nodeCidrBlock),
+		Description: common.String("Kubernetes worker to control plane communication"),
+		TcpOptions: &core.TcpOptions{
+			DestinationPortRange: &core.PortRange{
+				Max: common.Int(12250),
+				Min: common.Int(12250),
+			},
+		},
+		IsStateless: common.Bool(false),
+	})
+
+	// Default egress rule to allow outbound traffic to worker nodes
+	ctrlSecurityList.EgressSecurityRules = append(ctrlSecurityList.EgressSecurityRules, core.EgressSecurityRule{
+		Protocol:    common.String("6"), // TCP
+		Destination: common.String(nodeCidrBlock),
+		Description: common.String("All traffic to worker nodes"),
+		IsStateless: common.Bool(false),
+	})
+	// Allow ICMP traffic from worker nodes for path discovery
+	ctrlSecurityList.EgressSecurityRules = append(ctrlSecurityList.EgressSecurityRules, core.EgressSecurityRule{
+		Protocol:    common.String("1"),
+		Destination: common.String(nodeCidrBlock),
+		Description: common.String("Path discovery"),
+		IcmpOptions: &core.IcmpOptions{
+			Code: common.Int(4),
+			Type: common.Int(3),
+		},
+		IsStateless: common.Bool(false),
+	})
+
+	var allServices *core.Service
+	serviceList, err := mgr.virtualNetworkClient.ListServices(ctx, core.ListServicesRequest{})
+	if err != nil {
+		return []string{}, err
+	}
+	for _, service := range serviceList.Items {
+		if strings.HasSuffix(strings.ToLower(*service.Name), strings.ToLower("Services In Oracle Services Network")) {
+			allServices = &service
+			// Default egress rule to allow outbound traffic to OKE
+			ctrlSecurityList.EgressSecurityRules = append(ctrlSecurityList.EgressSecurityRules, core.EgressSecurityRule{
+				Protocol:        common.String("6"), // TCP
+				Destination:     allServices.CidrBlock,
+				DestinationType: core.EgressSecurityRuleDestinationTypeServiceCidrBlock,
+				Description:     common.String("Allow Kubernetes Control Plane to communicate with OKE"),
+				TcpOptions: &core.TcpOptions{
+					DestinationPortRange: &core.PortRange{
+						Max: common.Int(443),
+						Min: common.Int(443),
+					},
+				},
+				IsStateless: common.Bool(false),
+			})
+		}
+	}
+
+	ctrlSecurityListResp, err := mgr.virtualNetworkClient.CreateSecurityList(ctx, ctrlSecurityList)
+	helpers.FatalIfError(err)
+
+	return []string{*ctrlSecurityListResp.SecurityList.Id}, nil
 }
 
 // Create the service security list
@@ -1585,4 +1860,11 @@ func newTokenSigner(requestSigner common.HTTPRequestSigner, interceptor common.R
 
 		return r, nil
 	}
+}
+
+func negate(b bool) *bool {
+	if b {
+		return common.Bool(false)
+	}
+	return common.Bool(true)
 }

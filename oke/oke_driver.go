@@ -57,6 +57,12 @@ type State struct {
 	// Should the Helm server (Tiller) be enabled
 	EnableTiller bool
 
+	// Should K8s API endpoint have private IP (i.e. only accessible from VCN, bastion, or authorized SaaS services)
+	// Note, Rancher needs to be able to access the K8s API on the private VCN IP for this to be successful e.g. https://10.0.0.2:6443
+	// Typically, that means Rancher is running in the same VCN as the specified control plane subnet (see also control-plane-subnet-name)
+	PrivateControlPlane bool
+
+	// Should worker nodes have private IPs (i.e. only accessible from an LB on the service subnet)
 	PrivateNodes bool
 
 	// The name of the cluster (and default node pool)
@@ -125,6 +131,10 @@ type NetworkConfiguration struct {
 	PodCidr string
 	// The IP address range of the Kubernetes Service IPs
 	ServiceCidr string
+	// Optional name of the bastion subnet
+	BastionSubnetName string
+	// Optional name of the control plane (Kubernetes API endpoint) subnet
+	ControlPlaneSubnetName string
 	// Optional pre-existing load balancer subnets to host load balancers for services
 	ServiceLBSubnet1Name string
 	ServiceLBSubnet2Name string
@@ -211,7 +221,7 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 		return errors.Wrap(err, "could not retrieve virtual cloud network (VCN)")
 	}
 
-	logrus.Info("Deleting cluster")
+	logrus.Info("Deleting OKE cluster")
 	err = oke.DeleteCluster(ctx, state.ClusterID)
 	if err != nil {
 		return errors.Wrap(err, "could not delete cluster")
@@ -388,6 +398,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The name of the second existing subnet to use for Kubernetes services / LB",
 	}
+	driverFlag.Options["enable-private-control-plane"] = &types.Flag{
+		Type:  types.BoolType,
+		Usage: "Whether Kubernetes API endpoint is a private IP only accessible from within the VCN",
+	}
 	driverFlag.Options["enable-private-nodes"] = &types.Flag{
 		Type:  types.BoolType,
 		Usage: "Whether worker nodes are deployed in private subnets",
@@ -399,9 +413,6 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	driverFlag.Options["node-pool-subnet-name"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "Optional name for node pool subnet",
-		Default: &types.Default{
-			DefaultString: nodeSubnetName,
-		},
 	}
 	driverFlag.Options["node-pool-security-list-name"] = &types.Flag{
 		Type:  types.StringType,
@@ -480,6 +491,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.TenancyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "tenancy-id", "tenancyId").(string)
 	state.UserOCID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "user-ocid", "userOcid").(string)
 	state.WaitNodesActive = options.GetValueFromDriverOptions(driverOptions, types.IntType, "wait-nodes-active", "waitNodesActive").(int64)
+	state.PrivateControlPlane = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-control-plane", "enablePrivatControlPlane").(bool)
 	state.PrivateNodes = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-nodes", "enablePrivateNodes").(bool)
 	state.WorkerNodeIngressCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-node-ingress-cidr", "WorkerNodeIngressCidr", "workerNodeIngressCidr").(string)
 
@@ -497,6 +509,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.Network = NetworkConfiguration{
 		VcnCompartmentID:               options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-compartment-id", "vcnCompartmentId").(string),
 		VCNName:                        options.GetValueFromDriverOptions(driverOptions, types.StringType, "vcn-name", "vcnName").(string),
+		BastionSubnetName:              options.GetValueFromDriverOptions(driverOptions, types.StringType, "bastion-subnet-name", "bastionSubnetName").(string),
+		ControlPlaneSubnetName:         options.GetValueFromDriverOptions(driverOptions, types.StringType, "control-plane-subnet-name", "controlPlaneSubnetName").(string),
 		ServiceLBSubnet1Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-1", "loadBalancerSubnetName1").(string),
 		ServiceLBSubnet2Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-2", "loadBalancerSubnetName2").(string),
 		QuantityOfSubnets:              options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
@@ -515,6 +529,14 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 
 	if state.Network.NodePoolSubnetName == "" {
 		state.Network.NodePoolSubnetName = nodeSubnetName
+	}
+
+	if state.Network.ControlPlaneSubnetName == "" {
+		state.Network.ControlPlaneSubnetName = controlPlaneSubnetName
+	}
+
+	if state.Network.BastionSubnetName == "" {
+		state.Network.BastionSubnetName = bastionSubnetName
 	}
 
 	if state.Network.NodePoolSubnetSecurityListName == "" {
@@ -597,7 +619,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	if err != nil {
 		return nil, err
 	}
-	
+
 	/*
 	* The ClusterInfo includes the following information Version, ServiceAccountToken,Endpoint, username, password, etc
 	 */
@@ -614,6 +636,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	}
 
 	var vcnID string
+	var controlPlaneSubnetID string
 	var serviceSubnetIDs, nodeSubnetIds []string
 
 	// Check if we should create a new VCN or make use of an existing VCN and subnets.
@@ -630,7 +653,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		state.Network.QuantityOfSubnets = 1
 
 		logrus.Infof("Creating a new VCN and required network resources for OKE cluster %s", state.Name)
-		vcnID, serviceSubnetIDs, nodeSubnetIds, err = oke.CreateVCNAndNetworkResources(&state)
+		vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds, err = oke.CreateVCNAndNetworkResources(&state)
 
 		if err != nil {
 			logrus.Debugf("error creating the VCN and/or the required network resources %v", err)
@@ -646,6 +669,14 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 			logrus.Debugf("error looking up the Id of existing VCN %s %v", state.Network.VCNName, err)
 			return clusterInfo, err
 		}
+
+		// Will pick up a subnet if specified or a preexisting subnet that uses the default subnet name
+		controlPlaneSubnetID, err = oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ControlPlaneSubnetName)
+		if err != nil {
+			// For backwards compatibility, we can create a cluster without specifying the control-plane subnet.
+			logrus.Info("warning: unable to look up the Id the Kubernetes control-plane subnet %s %v", state.Network.ControlPlaneSubnetName, err)
+		}
+
 		serviceSubnet1Id, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ServiceLBSubnet1Name)
 		if err != nil {
 			logrus.Debugf("error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet1Name, err)
@@ -664,17 +695,19 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 
 		nodeSubnetId, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
 		if err != nil {
-			// A node pool subnet net was explicitly passed in, so error out if it is not found.
+			// If a custom node pool subnet net was explicitly passed in, error out if it is not found.
 			if state.Network.NodePoolSubnetName != nodeSubnetName {
 				logrus.Debugf("error looking up the Id of a Kubernetes node Subnet %s %v", state.Network.NodePoolSubnetName, err)
 				return clusterInfo, err
 			}
-			// Node pool subnet net was not passed in, attempt to deduce it
+			// Node pool subnet name was not passed in, attempt to deduce it
 			nodeSubnetIds, _ = oke.ListSubnetIdsInVcn(ctx, state.Network.VcnCompartmentID, vcnID)
-			for _, serviceSubnetID := range serviceSubnetIDs {
-				for i, vcnSubnetID := range nodeSubnetIds {
-					if serviceSubnetID == vcnSubnetID {
+			for _, knownSubnet := range append(serviceSubnetIDs, controlPlaneSubnetID) {
+				for i, nextSubnetId := range nodeSubnetIds {
+					// Remove the known service subnet, control-plane, and/or bastion subnets from the list
+					if nextSubnetId == knownSubnet {
 						nodeSubnetIds = remove(nodeSubnetIds, i)
+						break
 					}
 				}
 			}
@@ -686,16 +719,27 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		} else {
 			nodeSubnetIds = append(nodeSubnetIds, nodeSubnetId)
 		}
-	}
 
-	for _, nextNodeSubnetId := range nodeSubnetIds {
-		nextNodeSubnet, err := oke.GetSubnetById(ctx, nextNodeSubnetId)
-		if err != nil {
-			logrus.Debugf("error fetching node subnet %v", err)
-			return clusterInfo, err
+		// For existing VCNs, ensure private-control-plane and private-nodes settings are in sync with subnet access
+		if len(controlPlaneSubnetID) > 0 {
+			controlPlaneSubnet, err := oke.GetSubnetById(ctx, controlPlaneSubnetID)
+			if err != nil {
+				logrus.Debugf("error fetching Kubernetes control-plane subnet subnet %v", err)
+				return clusterInfo, err
+			}
+			if *controlPlaneSubnet.ProhibitPublicIpOnVnic != state.PrivateControlPlane {
+				state.PrivateControlPlane = *controlPlaneSubnet.ProhibitPublicIpOnVnic
+			}
 		}
-		if *nextNodeSubnet.ProhibitPublicIpOnVnic != state.PrivateNodes {
-			return nil, errors.Wrap(err, "please provide a private subnet for private nodes and a public subnet for public nodes")
+		for _, nextNodeSubnetId := range nodeSubnetIds {
+			nextNodeSubnet, err := oke.GetSubnetById(ctx, nextNodeSubnetId)
+			if err != nil {
+				logrus.Debugf("error fetching node subnet %v", err)
+				return clusterInfo, err
+			}
+			if *nextNodeSubnet.ProhibitPublicIpOnVnic != state.PrivateNodes {
+				state.PrivateNodes = *nextNodeSubnet.ProhibitPublicIpOnVnic
+			}
 		}
 	}
 
@@ -707,7 +751,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	}
 
 	logrus.Infof("Creating OKE cluster %s", state.Name)
-	err = oke.CreateCluster(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
+	err = oke.CreateCluster(ctx, &state, vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
 		logrus.Debugf("error creating the OKE cluster %v", err)
 		return clusterInfo, err
@@ -718,7 +762,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		return clusterInfo, err
 	}
 
-	logrus.Infof("Creating node pool for %s", state.Name)
+	logrus.Infof("Creating node pool for cluster %s", state.Name)
 	err = oke.CreateNodePool(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
 		logrus.Debugf("error creating the node pool %v", err)
@@ -796,7 +840,16 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 		return nil, errors.Wrap(err, "could not retrieve the Oracle Container Engine kubeconfig")
 	}
 
-	info.Endpoint = *cluster.Endpoints.Kubernetes
+	if cluster.Endpoints.Kubernetes != nil && len(*cluster.Endpoints.Kubernetes) > 0 {
+		info.Endpoint = *cluster.Endpoints.Kubernetes
+	} else {
+		if state.PrivateControlPlane {
+			logrus.Info("warning: access to the Kubernetes API endpoint is limited to the VCN, a bastion host, or authorized SaaS services")
+			info.Endpoint = *cluster.Endpoints.PrivateEndpoint
+		} else {
+			info.Endpoint = *cluster.Endpoints.PublicEndpoint
+		}
+	}
 	info.Version = *cluster.KubernetesVersion
 	info.Username = ""
 	info.Password = ""
@@ -829,6 +882,12 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 
 	info.ServiceAccountToken, err = generateServiceAccountToken(clientSet)
 	if err != nil {
+		if state.PrivateControlPlane {
+			// Avoid unnecessary cluster creation when state.PrivateControlPlane == true and inaccessible by Rancher.
+			// Results in cluster stuck in "Waiting for API to be available" (rather than the cluster being re-created over and over).
+			// Alternatively, we could set a more useful error message about the API server not being reachable.
+			return info, nil
+		}
 		return nil, errors.Wrap(err, "could not generate service account token from OKE kubeconfig")
 	}
 
