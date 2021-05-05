@@ -597,10 +597,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	if err != nil {
 		return nil, err
 	}
-
-	state.Network.ServiceCidr = "100.64.0.0/13"
-	state.Network.PodCidr = "100.96.0.0/11"
-
+	
 	/*
 	* The ClusterInfo includes the following information Version, ServiceAccountToken,Endpoint, username, password, etc
 	 */
