@@ -121,6 +121,10 @@ type NetworkConfiguration struct {
 	VcnCompartmentID string
 	// Optional pre-existing VCN in which you want to create cluster
 	VCNName string
+	// The IP address range of the Kubernetes Pod IPs
+	PodCidr string
+	// The IP address range of the Kubernetes Service IPs
+	ServiceCidr string
 	// Optional pre-existing load balancer subnets to host load balancers for services
 	ServiceLBSubnet1Name string
 	ServiceLBSubnet2Name string
@@ -316,6 +320,13 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The contents of the SSH public key to use for the nodes",
 	}
+	driverFlag.Options["pod-cidr"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "A CIDR IP range from which to assign Kubernetes Pod IPs",
+		Default: &types.Default{
+			DefaultString: podCIDRBlock,
+		},
+	}
 	driverFlag.Options["quantity-of-node-subnets"] = &types.Flag{
 		Type:  types.IntType,
 		Usage: "Number of node subnets (defaults to one in each AD)",
@@ -332,6 +343,13 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Usage: "Optional limit on the number of nodes in the pool. Default 0.",
 		Default: &types.Default{
 			DefaultInt: 0,
+		},
+	}
+	driverFlag.Options["service-cidr"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "A CIDR IP range from which to assign Kubernetes Service IPs",
+		Default: &types.Default{
+			DefaultString: servicesCIDRBlock,
 		},
 	}
 	driverFlag.Options["wait-nodes-active"] = &types.Flag{
@@ -482,6 +500,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		ServiceLBSubnet1Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-1", "loadBalancerSubnetName1").(string),
 		ServiceLBSubnet2Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-2", "loadBalancerSubnetName2").(string),
 		QuantityOfSubnets:              options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
+		PodCidr:                        options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-cidr", "podCidr").(string),
+		ServiceCidr:                    options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-cidr", "serviceCidr").(string),
 		NodePoolSubnetName:             options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-name", "nodePoolSubnetName").(string),
 		NodePoolSubnetSecurityListName: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-security-list-name", "nodePoolSubnetSecurityListName").(string),
 		NodePoolSubnetDnsDomainName:    options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-dns-domain-list-name", "nodePoolSubnetDnsDomainName").(string),
@@ -577,6 +597,9 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	if err != nil {
 		return nil, err
 	}
+
+	state.Network.ServiceCidr = "100.64.0.0/13"
+	state.Network.PodCidr = "100.96.0.0/11"
 
 	/*
 	* The ClusterInfo includes the following information Version, ServiceAccountToken,Endpoint, username, password, etc
