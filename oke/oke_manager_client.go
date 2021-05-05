@@ -44,6 +44,8 @@ const (
 	nodeCIDRBlock                  = "10.0.10.0/24"
 	bastionCIDRBlock               = "10.0.16.0/24"
 	serviceCIDRBlock               = "10.0.20.0/24"
+	podCIDRBlock                   = "10.244.0.0/16"
+	servicesCIDRBlock              = "10.96.0.0/16"
 	nodeSubnetName                 = "nodedns"
 	serviceSubnetName              = "svcdns"
 	bastionSubnetName              = "bastion"
@@ -126,6 +128,10 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 		AddOns: &containerengine.AddOnOptions{
 			IsKubernetesDashboardEnabled: common.Bool(state.EnableKubernetesDashboard),
 			IsTillerEnabled:              common.Bool(state.EnableTiller),
+		},
+		KubernetesNetworkConfig: &containerengine.KubernetesNetworkConfig{
+			PodsCidr:     common.String(state.Network.PodCidr),
+			ServicesCidr: common.String(state.Network.ServiceCidr),
 		},
 	}
 
