@@ -238,13 +238,6 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		state.KubernetesVersion = *kubernetesVersion
 	}
 
-	req := identity.ListAvailabilityDomainsRequest{}
-	req.CompartmentId = &state.CompartmentID
-	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
-	if err != nil {
-		return err
-	}
-
 	// Create a node pool for the cluster
 	npReq := containerengine.CreateNodePoolRequest{}
 	// get Image Id
@@ -262,6 +255,34 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
 		}
 	}
+
+	req := identity.ListAvailabilityDomainsRequest{}
+	req.CompartmentId = &state.CompartmentID
+	allADs, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	// Our particular image may not be available in every available AD
+	usableADs := make([]identity.AvailabilityDomain, 0, len(allADs.Items))
+
+	// Only add the AD to usableADs if our image is available.
+	for i := 0; i < len(allADs.Items); i++ {
+		listShapesReq := core.ListShapesRequest{}
+		listShapesReq.ImageId = image.Id
+		listShapesReq.CompartmentId = common.String(state.CompartmentID)
+		listShapesReq.AvailabilityDomain = allADs.Items[i].Name
+		listShapes, err := mgr.computeClient.ListShapes(ctx, listShapesReq)
+		if err != nil {
+			return err
+		}
+		for _, shape := range listShapes.Items {
+			if *shape.Shape == state.NodePool.NodeShape {
+				usableADs = append(usableADs, allADs.Items[i])
+			}
+		}
+	}
+
 	npReq.Name = common.String(state.Name + "-1")
 	npReq.CompartmentId = common.String(state.CompartmentID)
 	npReq.ClusterId = &state.ClusterID
@@ -280,12 +301,12 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		npReq.SshPublicKey = common.String(state.NodePool.NodePublicSSHKeyContents)
 	}
 	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
-		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(ads.Items)),
-		Size:             common.Int(limitN(int(state.NodePool.QuantityPerSubnet)*len(ads.Items), int(state.NodePool.LimitNodeCount))),
+		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(usableADs)),
+		Size:             common.Int(limitN(int(state.NodePool.QuantityPerSubnet)*len(usableADs), int(state.NodePool.LimitNodeCount))),
 	}
 
 	// Match up subnet(s) to availability domains
-	for i := 0; i < len(ads.Items); i++ {
+	for i := 0; i < len(usableADs); i++ {
 		nextSubnetId := ""
 		if len(nodeSubnetIds) == 1 {
 			// use a single regional subnet (default)
@@ -296,7 +317,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		}
 		npReq.NodeConfigDetails.PlacementConfigs = append(npReq.NodeConfigDetails.PlacementConfigs,
 			containerengine.NodePoolPlacementConfigDetails{
-				AvailabilityDomain: ads.Items[i].Name,
+				AvailabilityDomain: usableADs[i].Name,
 				SubnetId:           &nextSubnetId,
 			})
 	}
