@@ -121,6 +121,15 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 		state.KubernetesVersion = *kubernetesVersion
 	}
 
+	var podCIDRRequest = common.String(state.Network.PodCidr)
+	if state.Network.PodCidr == podCIDRBlock {
+		podCIDRRequest = nil
+	}
+	var serviceCIDRRequest = common.String(state.Network.ServiceCidr)
+	if state.Network.ServiceCidr == servicesCIDRBlock {
+		serviceCIDRRequest = nil
+	}
+
 	cReq := containerengine.CreateClusterRequest{}
 	cReq.Name = common.String(state.Name)
 	cReq.CompartmentId = &state.CompartmentID
@@ -133,8 +142,8 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 			IsTillerEnabled:              common.Bool(state.EnableTiller),
 		},
 		KubernetesNetworkConfig: &containerengine.KubernetesNetworkConfig{
-			PodsCidr:     common.String(state.Network.PodCidr),
-			ServicesCidr: common.String(state.Network.ServiceCidr),
+			PodsCidr:     podCIDRRequest,
+			ServicesCidr: serviceCIDRRequest,
 		},
 	}
 	if len(controlPlaneSubnetID) > 0 {
@@ -157,6 +166,13 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	if err != nil {
 		logrus.Debugf("get work request failed with err %v", err)
 		return err
+	}else if containerengine.WorkRequestStatusFailed == workReqRespCluster.WorkRequest.Status {
+		logrus.Debugf("work request operation type %v returned with status %v",
+			workReqRespCluster.WorkRequest.OperationType,
+			workReqRespCluster.WorkRequest.Status)
+		return fmt.Errorf("work request operation type %v returned with status %v",
+			workReqRespCluster.WorkRequest.OperationType,
+			workReqRespCluster.WorkRequest.Status)
 	}
 
 	clusterID := getResourceID(workReqRespCluster.Resources, containerengine.WorkRequestResourceActionTypeCreated, string(containerengine.ListWorkRequestsResourceTypeCluster))
