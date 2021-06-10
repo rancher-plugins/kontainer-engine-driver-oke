@@ -102,6 +102,9 @@ type State struct {
 	// Optional CIDR from which to allow ingress to worker nodes
 	WorkerNodeIngressCidr string
 
+	//The OCID of the KMS key to be used as the master for Kubernetes secret encryption
+	KmsKeyID string
+
 	// The labels specified during the Kubernetes creation
 	// TODO currently unused
 	KubernetesLabels map[string]string
@@ -298,6 +301,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The display name of the OKE cluster (and VCN and node pool if applicable) that should be displayed to the user",
 	}
+	driverFlag.Options["kms-key-id"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The OCID of the KMS key to be used as the master for Kubernetes secret encryption",
+	}
 	driverFlag.Options["kubernetes-version"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The Kubernetes version that will be used for your master and worker nodes e.g. v1.11.9, v1.12.7",
@@ -482,6 +489,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.EnableTiller = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-tiller", "enableTiller").(bool)
 	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVcnDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
+	state.KmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType,"kms-key-id", "kmsKeyId").(string)
+
 	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesVersion").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
 	state.PrivateKeyContents = options.GetValueFromDriverOptions(driverOptions, types.StringType, "private-key-contents", "privateKeyContents").(string)
@@ -652,6 +661,15 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		}
 		state.Network.QuantityOfSubnets = 1
 
+        // the case where we are creating the vcn, and the cluster did not finish successfully,
+        // we want to perform a manual recreate
+		vcnAlreadyCreated, err := oke.GetVcnByName(ctx, state.CompartmentID,  state.Network.VCNName)
+		if err == nil && len(vcnAlreadyCreated.String()) > 0 {
+			logrus.Debugf("Info: recreating vcn %v in compartment %s", state.Network.VCNName, state.CompartmentID)
+            // a previous attempt failed, so let's delete this one and create a new one below
+            oke.DeleteVCN(ctx, *vcnAlreadyCreated.Id)
+		}
+
 		logrus.Infof("Creating a new VCN and required network resources for OKE cluster %s", state.Name)
 		vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds, err = oke.CreateVCNAndNetworkResources(&state)
 
@@ -748,12 +766,15 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	clusterID, err := oke.GetClusterByName(ctx, state.CompartmentID, state.Name)
 	if err == nil && len(clusterID) > 0 {
 		logrus.Debugf("warning: an existing cluster with name %s already exists in compartment %s", state.Name, state.CompartmentID)
+		logrus.Debugf("removing cluster %s  as part of recreate attempt", state.ClusterID)
+		oke.DeleteCluster(ctx,clusterID)
 	}
 
 	logrus.Infof("Creating OKE cluster %s", state.Name)
 	err = oke.CreateCluster(ctx, &state, vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
 		logrus.Debugf("error creating the OKE cluster %v", err)
+
 		return clusterInfo, err
 	}
 	err = storeState(clusterInfo, state)

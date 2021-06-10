@@ -134,6 +134,11 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	cReq.Name = common.String(state.Name)
 	cReq.CompartmentId = &state.CompartmentID
 	cReq.VcnId = common.String(vcnID)
+
+	if state.KmsKeyID != ""{
+		cReq.KmsKeyId = &state.KmsKeyID
+	}
+
 	cReq.KubernetesVersion = common.String(state.KubernetesVersion)
 	cReq.Options = &containerengine.ClusterCreateOptions{
 		ServiceLbSubnetIds: serviceSubnetIds,
@@ -186,6 +191,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 
 	return nil
 }
+
 
 // GetClusterByID returns the cluster with the specified Id, or an error
 func (mgr *ClusterManagerClient) GetClusterByID(ctx context.Context, clusterID string) (containerengine.Cluster, error) {
