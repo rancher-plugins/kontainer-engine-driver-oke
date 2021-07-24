@@ -500,7 +500,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.TenancyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "tenancy-id", "tenancyId").(string)
 	state.UserOCID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "user-ocid", "userOcid").(string)
 	state.WaitNodesActive = options.GetValueFromDriverOptions(driverOptions, types.IntType, "wait-nodes-active", "waitNodesActive").(int64)
-	state.PrivateControlPlane = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-control-plane", "enablePrivatControlPlane").(bool)
+	state.PrivateControlPlane = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-control-plane", "enablePrivateControlPlane","enablePrivatControlPlane").(bool)
 	state.PrivateNodes = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-nodes", "enablePrivateNodes").(bool)
 	state.WorkerNodeIngressCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-node-ingress-cidr", "WorkerNodeIngressCidr", "workerNodeIngressCidr").(string)
 
