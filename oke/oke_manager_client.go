@@ -1464,9 +1464,10 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 				Source:   common.String(vcnCIDRBlock),
 			})
 			// Allow internal traffic from NAT gateway to the bastion by default
+			natCIDR := *ngResp.NatIp + "/32"
 			bastionSecList.IngressSecurityRules = append(bastionSecList.IngressSecurityRules, core.IngressSecurityRule{
 				Protocol: common.String("all"),
-				Source:   ngResp.NatIp,
+				Source:   &natCIDR,
 			})
 
 			// Allow outgoing traffic to VCN from the bastion by default
