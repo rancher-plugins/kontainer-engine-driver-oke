@@ -135,7 +135,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	cReq.CompartmentId = &state.CompartmentID
 	cReq.VcnId = common.String(vcnID)
 
-	if state.KmsKeyID != ""{
+	if state.KmsKeyID != "" {
 		cReq.KmsKeyId = &state.KmsKeyID
 	}
 
@@ -171,7 +171,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	if err != nil {
 		logrus.Debugf("get work request failed with err %v", err)
 		return err
-	}else if containerengine.WorkRequestStatusFailed == workReqRespCluster.WorkRequest.Status {
+	} else if containerengine.WorkRequestStatusFailed == workReqRespCluster.WorkRequest.Status {
 		logrus.Debugf("work request operation type %v returned with status %v",
 			workReqRespCluster.WorkRequest.OperationType,
 			workReqRespCluster.WorkRequest.Status)
@@ -191,7 +191,6 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 
 	return nil
 }
-
 
 // GetClusterByID returns the cluster with the specified Id, or an error
 func (mgr *ClusterManagerClient) GetClusterByID(ctx context.Context, clusterID string) (containerengine.Cluster, error) {
@@ -321,6 +320,11 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	npReq.InitialNodeLabels = []containerengine.KeyValue{{Key: common.String("driver"), Value: common.String("oraclekubernetesengine")}}
 	if state.NodePool.NodePublicSSHKeyContents != "" {
 		npReq.SshPublicKey = common.String(state.NodePool.NodePublicSSHKeyContents)
+	}
+	if state.NodePool.NodeUserDataContents != "" {
+		nodeMetadata := make(map[string]string)
+		nodeMetadata["user_data"] = state.NodePool.NodeUserDataContents
+		npReq.NodeMetadata = nodeMetadata
 	}
 	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
 		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(usableADs)),

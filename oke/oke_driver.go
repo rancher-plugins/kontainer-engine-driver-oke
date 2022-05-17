@@ -166,6 +166,10 @@ type NodeConfiguration struct {
 	NodePublicSSHKeyPath string
 	// The optional public SSH Key contents to access the worker nodes
 	NodePublicSSHKeyContents string
+	// The optional user_data file path to execute on worker nodes
+	NodeUserDataPath string
+	// The optional user_data contents to execute on worker nodes
+	NodeUserDataContents string
 	// The number of nodes in each subnet / availability domain
 	QuantityPerSubnet int64
 	// Optional limit on the number of nodes in the pool. Default 0.
@@ -329,6 +333,14 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.BoolType,
 		Usage: "Whether to skip deleting VCN",
 	}
+	driverFlag.Options["node-user-data-path"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The path to custom cloud-init / user_data for the nodes",
+	}
+	driverFlag.Options["node-user-data-contents"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The contents of custom cloud-init / user_data for the nodes",
+	}
 	driverFlag.Options["node-public-key-path"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The path to the SSH public key to use for the nodes",
@@ -489,7 +501,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.EnableTiller = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-tiller", "enableTiller").(bool)
 	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVcnDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
-	state.KmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType,"kms-key-id", "kmsKeyId").(string)
+	state.KmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kms-key-id", "kmsKeyId").(string)
 
 	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesVersion").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
@@ -500,7 +512,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.TenancyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "tenancy-id", "tenancyId").(string)
 	state.UserOCID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "user-ocid", "userOcid").(string)
 	state.WaitNodesActive = options.GetValueFromDriverOptions(driverOptions, types.IntType, "wait-nodes-active", "waitNodesActive").(int64)
-	state.PrivateControlPlane = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-control-plane", "enablePrivateControlPlane","enablePrivatControlPlane").(bool)
+	state.PrivateControlPlane = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-control-plane", "enablePrivateControlPlane", "enablePrivatControlPlane").(bool)
 	state.PrivateNodes = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "enable-private-nodes", "enablePrivateNodes").(bool)
 	state.WorkerNodeIngressCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-node-ingress-cidr", "WorkerNodeIngressCidr", "workerNodeIngressCidr").(string)
 
@@ -511,6 +523,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		NodeShape:                options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeShape").(string),
 		NodePublicSSHKeyPath:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-path", "nodePublicKeyPath").(string),
 		NodePublicSSHKeyContents: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-contents", "nodePublicKeyContents").(string),
+		NodeUserDataPath:         options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-user-data-path", "nodeUserDataPath").(string),
+		NodeUserDataContents:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-user-data-contents", "nodeUserDataContents").(string),
 		QuantityPerSubnet:        options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-per-subnet", "quantityPerSubnet").(int64),
 		LimitNodeCount:           options.GetValueFromDriverOptions(driverOptions, types.IntType, "limit-node-count", "limitNodeCount").(int64),
 	}
@@ -583,6 +597,13 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		publicKeyBytes, err := ioutil.ReadFile(state.NodePool.NodePublicSSHKeyPath)
 		if err == nil {
 			state.NodePool.NodePublicSSHKeyContents = string(publicKeyBytes)
+		}
+	}
+
+	if state.NodePool.NodeUserDataContents == "" && state.NodePool.NodeUserDataPath != "" {
+		userDataBytes, err := ioutil.ReadFile(state.NodePool.NodeUserDataPath)
+		if err == nil {
+			state.NodePool.NodeUserDataContents = string(userDataBytes)
 		}
 	}
 
@@ -661,13 +682,13 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		}
 		state.Network.QuantityOfSubnets = 1
 
-        // the case where we are creating the vcn, and the cluster did not finish successfully,
-        // we want to perform a manual recreate
-		vcnAlreadyCreated, err := oke.GetVcnByName(ctx, state.CompartmentID,  state.Network.VCNName)
+		// the case where we are creating the vcn, and the cluster did not finish successfully,
+		// we want to perform a manual recreate
+		vcnAlreadyCreated, err := oke.GetVcnByName(ctx, state.CompartmentID, state.Network.VCNName)
 		if err == nil && len(vcnAlreadyCreated.String()) > 0 {
 			logrus.Debugf("Info: recreating vcn %v in compartment %s", state.Network.VCNName, state.CompartmentID)
-            // a previous attempt failed, so let's delete this one and create a new one below
-            oke.DeleteVCN(ctx, *vcnAlreadyCreated.Id)
+			// a previous attempt failed, so let's delete this one and create a new one below
+			oke.DeleteVCN(ctx, *vcnAlreadyCreated.Id)
 		}
 
 		logrus.Infof("Creating a new VCN and required network resources for OKE cluster %s", state.Name)
@@ -767,7 +788,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	if err == nil && len(clusterID) > 0 {
 		logrus.Debugf("warning: an existing cluster with name %s already exists in compartment %s", state.Name, state.CompartmentID)
 		logrus.Debugf("removing cluster %s  as part of recreate attempt", state.ClusterID)
-		oke.DeleteCluster(ctx,clusterID)
+		oke.DeleteCluster(ctx, clusterID)
 	}
 
 	logrus.Infof("Creating OKE cluster %s", state.Name)
