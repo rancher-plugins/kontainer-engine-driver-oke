@@ -20,6 +20,7 @@ package oke
  */
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
@@ -335,11 +336,11 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	}
 	driverFlag.Options["node-user-data-path"] = &types.Flag{
 		Type:  types.StringType,
-		Usage: "The path to custom cloud-init / user_data for the nodes",
+		Usage: "The path to custom cloud-init / user_data for the nodes - file contents will be base64 encoded internally if it is not already",
 	}
 	driverFlag.Options["node-user-data-contents"] = &types.Flag{
 		Type:  types.StringType,
-		Usage: "The contents of custom cloud-init / user_data for the nodes",
+		Usage: "The string of custom cloud-init / user_data for the nodes - string will be base64 encoded internally if it is not already",
 	}
 	driverFlag.Options["node-public-key-path"] = &types.Flag{
 		Type:  types.StringType,
@@ -600,10 +601,21 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		}
 	}
 
-	if state.NodePool.NodeUserDataContents == "" && state.NodePool.NodeUserDataPath != "" {
+	if state.NodePool.NodeUserDataContents != "" {
+		userDataBytes := []byte(state.NodePool.NodeUserDataContents)
+		if !isBase64Encoded(userDataBytes) {
+			// String was not base64 encoded.
+			state.NodePool.NodeUserDataContents = base64.StdEncoding.EncodeToString(userDataBytes)
+		}
+	} else if state.NodePool.NodeUserDataContents == "" && state.NodePool.NodeUserDataPath != "" {
 		userDataBytes, err := ioutil.ReadFile(state.NodePool.NodeUserDataPath)
 		if err == nil {
-			state.NodePool.NodeUserDataContents = string(userDataBytes)
+			if !isBase64Encoded(userDataBytes) {
+				// Files was not base64 encoded.
+				state.NodePool.NodeUserDataContents = base64.StdEncoding.EncodeToString(userDataBytes)
+			} else {
+				state.NodePool.NodeUserDataContents = string(userDataBytes)
+			}
 		}
 	}
 
@@ -1222,4 +1234,9 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 	}
 
 	return token, nil
+}
+
+func isBase64Encoded(data []byte) bool {
+	_, err := base64.StdEncoding.DecodeString(string(data))
+	return err == nil
 }

@@ -19,7 +19,7 @@ require (
 	golang.org/x/crypto v0.0.0-20190829043050-9756ffdc2472 // indirect
 	golang.org/x/net v0.0.0-20190812203447-cdfb69ac37fc
 	golang.org/x/oauth2 v0.0.0-20190402181905-9f3314589c9a // indirect
-	golang.org/x/sys v0.0.0-20190801041406-cbf593c0f2f3 // indirect
+	golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a // indirect
 	golang.org/x/time v0.0.0-20190308202827-9d24e82272b4 // indirect
 	google.golang.org/appengine v1.6.1 // indirect
 	google.golang.org/genproto v0.0.0-20190819201941-24fa4b261c55 // indirect
