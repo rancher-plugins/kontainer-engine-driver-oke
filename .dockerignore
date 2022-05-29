@@ -3,4 +3,5 @@
 ./dist
 ./.trash-cache
 ./trash.lock
+./.idea
 
