@@ -5,7 +5,7 @@ This repo contains the Oracle Container Engine for Kubernetes (OKE) driver for t
 
 ## Building
 
-`make`
+`make all`
 
 ## Running
 

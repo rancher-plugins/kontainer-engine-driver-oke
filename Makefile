@@ -8,7 +8,7 @@ DIST_DIR:=dist
 GO ?= go
 
 .PHONY: all
-all: build
+all: binary-build
 
 #
 # Go build related tasks
@@ -19,7 +19,7 @@ go-install:
 
 .PHONY: go-run
 go-run: go-install
-	GO111MODULE=on $(GO) run .
+	GO111MODULE=on $(GO) run . 10247 --v=9
 
 .PHONY: go-fmt
 go-fmt:
@@ -38,6 +38,7 @@ binary-build:
 	mkdir -p ${DIST_DIR}
 	GO111MODULE=on GOOS=linux GOARCH=amd64 go build -o ${DIST_DIR}/${BINARY_NAME}-linux .
 	GO111MODULE=on GOOS=darwin GOARCH=amd64 go build -o ${DIST_DIR}/${BINARY_NAME}-darwin .
+	shasum -a 256 ${DIST_DIR}/*
 
 #
 # Tests-related tasks
