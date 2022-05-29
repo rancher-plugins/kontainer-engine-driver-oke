@@ -41,7 +41,7 @@ func main() {
 	addr := make(chan string)
 	go types.NewServer(&oke.OKEDriver{}, addr).ServeOrDie(fmt.Sprintf("127.0.0.1:%v", port))
 
-	logrus.Debugf("oke driver up and running on at %v", <-addr)
+	logrus.Debugf("Oracle Container Engine for Kubernetes (oke) driver up and running on at %v", <-addr)
 
 	wg.Add(1)
 	wg.Wait() // wait forever, we only exit if killed by parent process
