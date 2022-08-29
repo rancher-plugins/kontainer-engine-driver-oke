@@ -261,19 +261,19 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 
 	// Create a node pool for the cluster
 	npReq := containerengine.CreateNodePoolRequest{}
-	// get Image Id
-	image, err := getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
+	// get Image Id from OKE
+	image, err := mgr.getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
 	if err != nil {
 		logrus.Printf("Node image ID not found")
 		return err
 	} else {
-		logrus.Printf("Node image ID found %v", *image.Id)
+		logrus.Printf("Node image ID found %v", image)
 		// Set a custom boot volume size if set
 		if state.NodePool.CustomBootVolumeSize != 0 {
-			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id,
+			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image),
 				BootVolumeSizeInGBs: common.Int64(state.NodePool.CustomBootVolumeSize)}
 		} else {
-			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: image.Id}
+			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image)}
 		}
 	}
 
@@ -290,7 +290,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	// Only add the AD to usableADs if our image is available.
 	for i := 0; i < len(allADs.Items); i++ {
 		listShapesReq := core.ListShapesRequest{}
-		listShapesReq.ImageId = image.Id
+		listShapesReq.ImageId = common.String(image)
 		listShapesReq.CompartmentId = common.String(state.CompartmentID)
 		listShapesReq.AvailabilityDomain = allADs.Items[i].Name
 		listShapes, err := mgr.computeClient.ListShapes(ctx, listShapesReq)
@@ -393,33 +393,26 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	return nil
 }
 
-func getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (core.Image, error) {
-	request := core.ListImagesRequest{
-		CompartmentId:   common.String(compartment),
-		OperatingSystem: common.String("Oracle Linux"),
-		Shape:           common.String(shape),
+func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (string, error) {
+	request := containerengine.GetNodePoolOptionsRequest{
+		NodePoolOptionId: common.String("all"),
 	}
-	r, err := c.ListImages(ctx, request)
+
+	r, err := mgr.containerEngineClient.GetNodePoolOptions(ctx, request)
 
 	if err != nil {
 		logrus.Debugf("listing image id's failed with err %v", err)
-		return core.Image{}, err
+		return "", err
 	}
 
-	index := -1
-	for n, i := range r.Items {
-		if strings.Compare(displayName, *i.DisplayName) == 0 {
-			index = n
-			break
+	for _, i := range r.Sources {
+		if strings.Compare(displayName, *i.GetSourceName()) == 0 {
+			return *i.(containerengine.NodeSourceViaImageOption).ImageId, nil
 		}
 	}
 
-	if index < 0 {
-		logrus.Debugf("unable to find an image for displayName: %s", displayName)
-		return core.Image{}, fmt.Errorf("unable to retrieve image %s", displayName)
-	}
-
-	return r.Items[index], err
+	logrus.Debugf("unable to find an image for displayName: %s", displayName)
+	return "", err
 }
 
 // GetNodePoolByID returns the node pool with the specified Id, or an error.
