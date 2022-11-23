@@ -23,10 +23,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
-	"os"
-	"strings"
-
 	"github.com/oracle/oci-go-sdk/v38/common"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
@@ -34,11 +30,16 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
+	"io/ioutil"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierror "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+	"os"
+	"strings"
+	"time"
 )
 
 const (
@@ -1190,27 +1191,58 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 	namespace := "default"
 	name := "kontainer-engine"
 
-	// Create new service account, if it does not exist already
+	serverVersion, err := clientset.Discovery().ServerVersion()
+	if err != nil {
+		return "", err
+	}
+	logrus.Debugf("Kubernetes server version: %s", serverVersion)
 
 	serviceAccount := &v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name}}
 
-	_, _ = clientset.CoreV1().ServiceAccounts(namespace).Create(serviceAccount)
+	// Create new service account, if it does not exist already
+	_, err = clientset.CoreV1().ServiceAccounts(namespace).Create(serviceAccount)
+	if err != nil {
+		if !apierror.IsAlreadyExists(err) {
+			return "", err
+		}
+	}
 
-	// Look up service account
-	serviceAccount, err := clientset.CoreV1().ServiceAccounts(namespace).Get(serviceAccount.Name, metav1.GetOptions{})
+	serviceAccount, err = clientset.CoreV1().ServiceAccounts(namespace).Get(name, metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
 
-	if len(serviceAccount.Secrets) > 0 {
-		secret := serviceAccount.Secrets[0]
-		secretObj, err := clientset.CoreV1().Secrets(namespace).Get(secret.Name, metav1.GetOptions{})
-		if err != nil {
-			return "", fmt.Errorf("error getting secret: %v", err)
+	// Template for an authentication token secret bound to the service account
+	secretTemplate := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: serviceAccount.Name + "-token",
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: "v1",
+					Kind:       "ServiceAccount",
+					Name:       serviceAccount.Name,
+					UID:        serviceAccount.UID,
+				},
+			},
+			Annotations: map[string]string{
+				v1.ServiceAccountNameKey: serviceAccount.Name,
+			},
+		},
+		Type: v1.SecretTypeServiceAccountToken,
+	}
+
+	_, err = clientset.CoreV1().Secrets(namespace).Create(secretTemplate)
+	if err != nil {
+		if !apierror.IsAlreadyExists(err) {
+			return "", err
 		}
-		if byteToken, ok := secretObj.Data["token"]; ok {
-			token = string(byteToken)
-		}
+	}
+	// wait a few seconds for authentication token to populate
+	time.Sleep(10 * time.Second)
+
+	secretObj, err := clientset.CoreV1().Secrets(namespace).Get(serviceAccount.Name+"-token", metav1.GetOptions{})
+	if err != nil {
+		return "", err
 	}
 
 	// Create new cluster-role-bindings, if it does not exist already
@@ -1225,15 +1257,26 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 		},
 	}
 
-	_, _ = clientset.RbacV1().ClusterRoleBindings().Create(clusterRoleBinding)
+	_, err = clientset.RbacV1().ClusterRoleBindings().Create(clusterRoleBinding)
+	if err != nil {
+		if !apierror.IsAlreadyExists(err) {
+			return "", err
+		}
+	}
 
 	// Look up cluster role binding
-	clusterRoleBinding, err = clientset.RbacV1().ClusterRoleBindings().Get(clusterRoleBinding.Name, metav1.GetOptions{})
+	_, err = clientset.RbacV1().ClusterRoleBindings().Get(clusterRoleBinding.Name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("error getting cluster role binding: %v", err)
 	}
 
-	return token, nil
+	// get the bearer token from the token-secret
+	if byteToken, ok := secretObj.Data[v1.ServiceAccountTokenKey]; ok {
+		token = string(byteToken)
+		return token, nil
+	}
+
+	return "", fmt.Errorf("error getting authentication token from secret: %s", secretObj.Name)
 }
 
 func isBase64Encoded(data []byte) bool {
