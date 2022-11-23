@@ -73,22 +73,22 @@ func NewClusterManagerClient(configuration common.ConfigurationProvider) (*Clust
 
 	containerClient, err := containerengine.NewContainerEngineClientWithConfigurationProvider(configuration)
 	if err != nil {
-		logrus.Debugf("create new ContainerEngine client failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new ContainerEngine client failed with err %v", err)
 		return nil, err
 	}
 	coreComputeClient, err := core.NewComputeClientWithConfigurationProvider(configuration)
 	if err != nil {
-		logrus.Debugf("create new Compute client failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new Compute client failed with err %v", err)
 		return nil, err
 	}
 	vNetClient, err := core.NewVirtualNetworkClientWithConfigurationProvider(configuration)
 	if err != nil {
-		logrus.Debugf("create new VirtualNetwork client failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new VirtualNetwork client failed with err %v", err)
 		return nil, err
 	}
 	identityClient, err := identity.NewIdentityClientWithConfigurationProvider(configuration)
 	if err != nil {
-		logrus.Debugf("create new Identity client failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new Identity client failed with err %v", err)
 		return nil, err
 	}
 	c := &ClusterManagerClient{
@@ -109,7 +109,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	if state == nil {
 		return fmt.Errorf("valid state is required")
 	}
-	logrus.Debugf("creating cluster %s with VCN ID %s", state.Name, vcnID)
+	logrus.Debugf("[oraclecontainerengine] creating cluster %s with VCN ID %s", state.Name, vcnID)
 
 	if state.KubernetesVersion == "" {
 		kubernetesVersion, err := getDefaultKubernetesVersion(mgr.containerEngineClient)
@@ -164,15 +164,15 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	}
 
 	// wait until cluster creation work request complete
-	logrus.Debugf("waiting for cluster %s to reach Active status..", state.Name)
+	logrus.Debugf("[oraclecontainerengine] waiting for cluster %s to reach Active status..", state.Name)
 	// initial delay since subsequent back-off function waits longer each time the retry fails
 	time.Sleep(time.Minute * 3)
 	workReqRespCluster, err := waitUntilWorkRequestComplete(mgr.containerEngineClient, clusterResp.OpcWorkRequestId)
 	if err != nil {
-		logrus.Debugf("get work request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get work request failed with err %v", err)
 		return err
 	} else if containerengine.WorkRequestStatusFailed == workReqRespCluster.WorkRequest.Status {
-		logrus.Debugf("work request operation type %v returned with status %v",
+		logrus.Debugf("[oraclecontainerengine] work request operation type %v returned with status %v",
 			workReqRespCluster.WorkRequest.OperationType,
 			workReqRespCluster.WorkRequest.Status)
 		return fmt.Errorf("work request operation type %v returned with status %v",
@@ -186,7 +186,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 		return fmt.Errorf("could not retrieve clusterID")
 	}
 
-	logrus.Debugf("clusterID: %s has been created", *clusterID)
+	logrus.Debugf("[oraclecontainerengine] clusterID: %s has been created", *clusterID)
 	state.ClusterID = *clusterID
 
 	return nil
@@ -195,7 +195,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 // GetClusterByID returns the cluster with the specified Id, or an error
 func (mgr *ClusterManagerClient) GetClusterByID(ctx context.Context, clusterID string) (containerengine.Cluster, error) {
 
-	logrus.Debugf("getting cluster with Cluster ID %s", clusterID)
+	logrus.Debugf("[oraclecontainerengine] getting cluster with Cluster ID %s", clusterID)
 
 	if len(clusterID) == 0 {
 		return containerengine.Cluster{}, fmt.Errorf("clusterID must be set to retrieve the cluster")
@@ -206,7 +206,7 @@ func (mgr *ClusterManagerClient) GetClusterByID(ctx context.Context, clusterID s
 
 	resp, err := mgr.containerEngineClient.GetCluster(ctx, req)
 	if err != nil {
-		logrus.Debugf("get cluster request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get cluster request failed with err %v", err)
 		return containerengine.Cluster{}, err
 	}
 
@@ -216,7 +216,7 @@ func (mgr *ClusterManagerClient) GetClusterByID(ctx context.Context, clusterID s
 // GetClusterByName returns the Cluster ID of the Cluster with the specified
 // name in the specified compartment or an error if it is not found.
 func (mgr *ClusterManagerClient) GetClusterByName(ctx context.Context, compartmentID, name string) (string, error) {
-	logrus.Debugf("getting cluster with name %s", name)
+	logrus.Debugf("[oraclecontainerengine] getting cluster with name %s", name)
 
 	if len(compartmentID) == 0 {
 		return "", fmt.Errorf("compartmentID must be set to retrieve the cluster")
@@ -230,7 +230,7 @@ func (mgr *ClusterManagerClient) GetClusterByName(ctx context.Context, compartme
 
 	listClustersResp, err := mgr.containerEngineClient.ListClusters(ctx, listClustersReq)
 	if err != nil {
-		logrus.Debugf("list clusters failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list clusters failed with err %v", err)
 		return "", err
 	}
 	for _, cluster := range listClustersResp.Items {
@@ -249,7 +249,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	if state == nil {
 		return fmt.Errorf("valid state is required")
 	}
-	logrus.Debugf("creating node pool %s with VCN ID %s", state.Name, vcnID)
+	logrus.Debugf("[oraclecontainerengine] creating node pool %s with VCN ID %s", state.Name, vcnID)
 
 	if state.KubernetesVersion == "" {
 		kubernetesVersion, err := getDefaultKubernetesVersion(mgr.containerEngineClient)
@@ -264,10 +264,10 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	// get Image Id from OKE
 	image, err := mgr.getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
 	if err != nil {
-		logrus.Printf("Node image ID not found")
+		logrus.Printf("[oraclecontainerengine] Node image ID not found")
 		return err
 	} else {
-		logrus.Printf("Node image ID found %v", image)
+		logrus.Printf("[oraclecontainerengine] Node image ID found %v", image)
 		// Set a custom boot volume size if set
 		if state.NodePool.CustomBootVolumeSize != 0 {
 			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image),
@@ -310,7 +310,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	npReq.KubernetesVersion = &state.KubernetesVersion
 	npReq.NodeShape = common.String(state.NodePool.NodeShape)
 	if state.NodePool.FlexOCPUs != 0 {
-		logrus.Debugf("creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
+		logrus.Debugf("[oraclecontainerengine] creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
 		var ocpus = float32(state.NodePool.FlexOCPUs)
 		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
 	}
@@ -350,15 +350,15 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 
 	createNodePoolResp, err := mgr.containerEngineClient.CreateNodePool(ctx, npReq)
 	if err != nil {
-		logrus.Debugf("create node pool request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create node pool request failed with err %v", err)
 		return err
 	}
 
 	// wait until cluster creation work request complete
-	logrus.Debugf("waiting for node pool to be created...")
+	logrus.Debugf("[oraclecontainerengine] waiting for node pool to be created...")
 	workReqRespNodePool, err := waitUntilWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
 	if err != nil {
-		logrus.Debugf("get work request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get work request failed with err %v", err)
 		return err
 	}
 	// Wait for at least one individual nodes in the node pool to be created
@@ -401,7 +401,7 @@ func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeC
 	r, err := mgr.containerEngineClient.GetNodePoolOptions(ctx, request)
 
 	if err != nil {
-		logrus.Debugf("listing image id's failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] listing image id's failed with err %v", err)
 		return "", err
 	}
 
@@ -411,14 +411,14 @@ func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeC
 		}
 	}
 
-	logrus.Debugf("unable to find an image for displayName: %s", displayName)
+	logrus.Debugf("[oraclecontainerengine] unable to find an image for displayName: %s", displayName)
 	return "", err
 }
 
 // GetNodePoolByID returns the node pool with the specified Id, or an error.
 func (mgr *ClusterManagerClient) GetNodePoolByID(ctx context.Context, nodePoolID string) (containerengine.NodePool, error) {
 
-	logrus.Debugf("getting node pool with node pool ID %s", nodePoolID)
+	logrus.Debugf("[oraclecontainerengine] getting node pool with node pool ID %s", nodePoolID)
 
 	if len(nodePoolID) == 0 {
 		return containerengine.NodePool{}, fmt.Errorf("nodePoolID must be set to retrieve the node pool")
@@ -429,7 +429,7 @@ func (mgr *ClusterManagerClient) GetNodePoolByID(ctx context.Context, nodePoolID
 
 	resp, err := mgr.containerEngineClient.GetNodePool(ctx, req)
 	if err != nil {
-		logrus.Debugf("get node pool request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get node pool request failed with err %v", err)
 		return containerengine.NodePool{}, err
 	}
 
@@ -438,7 +438,7 @@ func (mgr *ClusterManagerClient) GetNodePoolByID(ctx context.Context, nodePoolID
 
 // ScaleNodePool updates the number of nodes in the node pool, or an error.
 func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID string, numNodes int, compartmentID string) error {
-	logrus.Debugf("scaling node pool %s to %d nodes", nodePoolID, numNodes)
+	logrus.Debugf("[oraclecontainerengine] scaling node pool %s to %d nodes", nodePoolID, numNodes)
 
 	npReq := containerengine.UpdateNodePoolRequest{}
 	npReq.NodePoolId = common.String(nodePoolID)
@@ -448,7 +448,7 @@ func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID s
 
 	_, err := mgr.containerEngineClient.UpdateNodePool(ctx, npReq)
 	if err != nil {
-		logrus.Debugf("scale node pool request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] scale node pool request failed with err %v", err)
 		return err
 	}
 
@@ -460,7 +460,7 @@ func (mgr *ClusterManagerClient) ScaleNodePool(ctx context.Context, nodePoolID s
 // or an error.
 func (mgr *ClusterManagerClient) UpdateMasterKubernetesVersion(ctx context.Context, clusterID, version string) error {
 
-	logrus.Debugf("updating master Kubernetes version of cluster ID %s to %s", clusterID, version)
+	logrus.Debugf("[oraclecontainerengine] updating master Kubernetes version of cluster ID %s to %s", clusterID, version)
 
 	if len(clusterID) == 0 {
 		return fmt.Errorf("clusterID must be set to upgrade the master(s)")
@@ -472,23 +472,23 @@ func (mgr *ClusterManagerClient) UpdateMasterKubernetesVersion(ctx context.Conte
 
 	cl, err := mgr.GetClusterByID(ctx, clusterID)
 	if err == nil {
-		logrus.Debugf("current Kubernetes version of cluster is %s", *cl.KubernetesVersion)
+		logrus.Debugf("[oraclecontainerengine] current Kubernetes version of cluster is %s", *cl.KubernetesVersion)
 	} else {
-		logrus.Debugf("cluster ID lookup failed with error %v", err)
+		logrus.Debugf("[oraclecontainerengine] cluster ID lookup failed with error %v", err)
 		return err
 	}
 
 	cpRes, err := mgr.containerEngineClient.UpdateCluster(ctx, clReq)
 	if err != nil {
-		logrus.Debugf("update Kubernetes version on cluster failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] update Kubernetes version on cluster failed with err %v", err)
 		return err
 	}
 
 	// wait until node pool deletion work request complete
-	logrus.Debugf("waiting for cluster master version update...")
+	logrus.Debugf("[oraclecontainerengine] waiting for cluster master version update...")
 	_, err = waitUntilWorkRequestComplete(mgr.containerEngineClient, cpRes.OpcWorkRequestId)
 	if err != nil {
-		logrus.Debugf("get work request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get work request failed with err %v", err)
 		return err
 	}
 
@@ -501,7 +501,7 @@ func (mgr *ClusterManagerClient) UpdateMasterKubernetesVersion(ctx context.Conte
 // an error.
 func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Context, nodePoolID, version string) error {
 
-	logrus.Debugf("updating node pool Kubernetes version of node pool ID %s to %s", nodePoolID, version)
+	logrus.Debugf("[oraclecontainerengine] updating node pool Kubernetes version of node pool ID %s to %s", nodePoolID, version)
 
 	if len(nodePoolID) == 0 {
 		return fmt.Errorf("nodePoolID must be set to upgrade the node pool")
@@ -513,16 +513,16 @@ func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Con
 
 	np, err := mgr.GetNodePoolByID(ctx, nodePoolID)
 	if err == nil {
-		logrus.Debugf("current Kubernetes version of node pool is %s", *np.KubernetesVersion)
+		logrus.Debugf("[oraclecontainerengine] current Kubernetes version of node pool is %s", *np.KubernetesVersion)
 	} else {
-		logrus.Debugf("node pool lookup failed with error %v", err)
+		logrus.Debugf("[oraclecontainerengine] node pool lookup failed with error %v", err)
 		return err
 	}
 
 	// New nodes added to this node pool will run the updated version
 	_, err = mgr.containerEngineClient.UpdateNodePool(ctx, npReq)
 	if err != nil {
-		logrus.Debugf("update Kubernetes version on node pool failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] update Kubernetes version on node pool failed with err %v", err)
 		return err
 	}
 
@@ -533,7 +533,7 @@ func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Con
 // GetVcnIDByClusterID returns the VCN ID for the existing cluster with the
 // specified Id, or an error.
 func (mgr *ClusterManagerClient) GetVcnIDByClusterID(ctx context.Context, clusterID string) (string, error) {
-	logrus.Debugf("getting cluster VCN with cluster ID %s", clusterID)
+	logrus.Debugf("[oraclecontainerengine] getting cluster VCN with cluster ID %s", clusterID)
 
 	cluster, err := mgr.GetClusterByID(ctx, clusterID)
 	if err != nil {
@@ -555,7 +555,7 @@ func (mgr *ClusterManagerClient) GetVcnIDByName(ctx context.Context, compartment
 
 // GetVcnIDByName returns the VCN with the specified name in the specified compartment or an error if it is not found.
 func (mgr *ClusterManagerClient) GetVcnByName(ctx context.Context, compartmentID, displayName string) (core.Vcn, error) {
-	logrus.Debugf("getting VCN with name %s", displayName)
+	logrus.Debugf("[oraclecontainerengine] getting VCN with name %s", displayName)
 
 	vcn := core.Vcn{}
 
@@ -571,7 +571,7 @@ func (mgr *ClusterManagerClient) GetVcnByName(ctx context.Context, compartmentID
 
 	listVcnsResp, err := mgr.virtualNetworkClient.ListVcns(ctx, listVcnsReq)
 	if err != nil {
-		logrus.Debugf("list VCNs failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list VCNs failed with err %v", err)
 		return vcn, err
 	}
 	for _, vcn := range listVcnsResp.Items {
@@ -597,7 +597,7 @@ func (mgr *ClusterManagerClient) GetSubnetIDByName(ctx context.Context, compartm
 // GetSubnetByName returns the subnet with the specified name in the specified
 // VCN and compartment, or an error if it is not found.
 func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmentID, vcnID, displayName string) (core.Subnet, error) {
-	logrus.Debugf("getting subnet with name %s", displayName)
+	logrus.Debugf("[oraclecontainerengine] getting subnet with name %s", displayName)
 
 	subnet := core.Subnet{}
 
@@ -614,7 +614,7 @@ func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmen
 
 	listSubnetsResp, err := mgr.virtualNetworkClient.ListSubnets(ctx, listSubnetsReq)
 	if err != nil {
-		logrus.Debugf("list subnets failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list subnets failed with err %v", err)
 		return subnet, err
 	}
 	for _, subnet := range listSubnetsResp.Items {
@@ -628,7 +628,7 @@ func (mgr *ClusterManagerClient) GetSubnetByName(ctx context.Context, compartmen
 
 // GetSubnetById returns the subnet with the specified id, or an error if it is not found.
 func (mgr *ClusterManagerClient) GetSubnetById(ctx context.Context, subnetId string) (core.Subnet, error) {
-	logrus.Debugf("getting subnet with ID %s", subnetId)
+	logrus.Debugf("[oraclecontainerengine] getting subnet with ID %s", subnetId)
 
 	subnet := core.Subnet{}
 
@@ -641,7 +641,7 @@ func (mgr *ClusterManagerClient) GetSubnetById(ctx context.Context, subnetId str
 
 	getSubnetResp, err := mgr.virtualNetworkClient.GetSubnet(ctx, getSubnetsReq)
 	if err != nil {
-		logrus.Debugf("list subnets failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list subnets failed with err %v", err)
 		return subnet, err
 	}
 
@@ -651,7 +651,7 @@ func (mgr *ClusterManagerClient) GetSubnetById(ctx context.Context, subnetId str
 // ListSubnetIdsInVcn returns the subnet IDs of any and all subnets in the
 // specified VCN.
 func (mgr *ClusterManagerClient) ListSubnetIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
-	logrus.Debugf("list subnet Ids called")
+	logrus.Debugf("[oraclecontainerengine] list subnet Ids called")
 
 	var ids []string
 
@@ -667,7 +667,7 @@ func (mgr *ClusterManagerClient) ListSubnetIdsInVcn(ctx context.Context, compart
 
 	listSubnetsResp, err := mgr.virtualNetworkClient.ListSubnets(ctx, listSubnetsReq)
 	if err != nil {
-		logrus.Debugf("list subnets failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list subnets failed with err %v", err)
 		return ids, err
 	}
 	for _, subnet := range listSubnetsResp.Items {
@@ -681,7 +681,7 @@ func (mgr *ClusterManagerClient) ListSubnetIdsInVcn(ctx context.Context, compart
 // ListRouteTableIdsInVcn returns the route table IDs of any and all route tables
 // in the specified VCN.
 func (mgr *ClusterManagerClient) ListRouteTableIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
-	logrus.Debugf("list route table Ids called")
+	logrus.Debugf("[oraclecontainerengine] list route table Ids called")
 
 	var ids []string
 
@@ -697,7 +697,7 @@ func (mgr *ClusterManagerClient) ListRouteTableIdsInVcn(ctx context.Context, com
 
 	listRouteTablesResp, err := mgr.virtualNetworkClient.ListRouteTables(ctx, listRouteTablesReq)
 	if err != nil {
-		logrus.Debugf("list route tables failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list route tables failed with err %v", err)
 		return ids, err
 	}
 	for _, rt := range listRouteTablesResp.Items {
@@ -711,7 +711,7 @@ func (mgr *ClusterManagerClient) ListRouteTableIdsInVcn(ctx context.Context, com
 // ListInternetGatewayIdsInVcn returns the route table IDs of any and all
 // Internet gateways in the specified VCN.
 func (mgr *ClusterManagerClient) ListInternetGatewayIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
-	logrus.Debugf("list Internet gateway Ids called")
+	logrus.Debugf("[oraclecontainerengine] list Internet gateway Ids called")
 
 	var ids []string
 
@@ -727,7 +727,7 @@ func (mgr *ClusterManagerClient) ListInternetGatewayIdsInVcn(ctx context.Context
 
 	listRouteTablesResp, err := mgr.virtualNetworkClient.ListInternetGateways(ctx, listInternetGatewaysReq)
 	if err != nil {
-		logrus.Debugf("list Internet gateways failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list Internet gateways failed with err %v", err)
 		return ids, err
 	}
 	for _, ig := range listRouteTablesResp.Items {
@@ -741,7 +741,7 @@ func (mgr *ClusterManagerClient) ListInternetGatewayIdsInVcn(ctx context.Context
 // ListNatGatewayIdsInVcn returns the NAT gateway IDs of any and all NAT
 // gateways in the specified VCN.
 func (mgr *ClusterManagerClient) ListNatGatewayIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
-	logrus.Debugf("list NAT gateway Ids called")
+	logrus.Debugf("[oraclecontainerengine] list NAT gateway Ids called")
 
 	var ids []string
 
@@ -757,7 +757,7 @@ func (mgr *ClusterManagerClient) ListNatGatewayIdsInVcn(ctx context.Context, com
 
 	listNATGatewaysResp, err := mgr.virtualNetworkClient.ListNatGateways(ctx, listInternetGatewaysReq)
 	if err != nil {
-		logrus.Debugf("list NAT gateways failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list NAT gateways failed with err %v", err)
 		return ids, err
 	}
 	for _, nGW := range listNATGatewaysResp.Items {
@@ -771,7 +771,7 @@ func (mgr *ClusterManagerClient) ListNatGatewayIdsInVcn(ctx context.Context, com
 // ListSecurityListIdsInVcn returns the security list IDs of any and all security
 // lists in the specified VCN.
 func (mgr *ClusterManagerClient) ListSecurityListIdsInVcn(ctx context.Context, compartmentID, vcnID string) ([]string, error) {
-	logrus.Debugf("list security list Ids called")
+	logrus.Debugf("[oraclecontainerengine] list security list Ids called")
 
 	var ids []string
 
@@ -787,7 +787,7 @@ func (mgr *ClusterManagerClient) ListSecurityListIdsInVcn(ctx context.Context, c
 
 	listSecurityListsResp, err := mgr.virtualNetworkClient.ListSecurityLists(ctx, listSecurityListsReq)
 	if err != nil {
-		logrus.Debugf("list security lists failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list security lists failed with err %v", err)
 		return ids, err
 	}
 	for _, sl := range listSecurityListsResp.Items {
@@ -801,7 +801,7 @@ func (mgr *ClusterManagerClient) ListSecurityListIdsInVcn(ctx context.Context, c
 // ListNodepoolIdsInCluster returns the node pool IDs of any and all node pools
 // in the specified cluster.
 func (mgr *ClusterManagerClient) ListNodepoolIdsInCluster(ctx context.Context, compartmentID, clusterID string) ([]string, error) {
-	logrus.Debugf("list node pool ID(s) for cluster ID %s", clusterID)
+	logrus.Debugf("[oraclecontainerengine] list node pool ID(s) for cluster ID %s", clusterID)
 
 	var ids []string
 
@@ -818,7 +818,7 @@ func (mgr *ClusterManagerClient) ListNodepoolIdsInCluster(ctx context.Context, c
 	resp, err := mgr.containerEngineClient.ListNodePools(ctx, req)
 
 	if err != nil {
-		logrus.Debugf("list Node Pools request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list Node Pools request failed with err %v", err)
 		return ids, err
 	}
 
@@ -832,7 +832,7 @@ func (mgr *ClusterManagerClient) ListNodepoolIdsInCluster(ctx context.Context, c
 
 // DeleteNodePool deletes the node pool with the specified ID, or an error
 func (mgr *ClusterManagerClient) DeleteNodePool(ctx context.Context, nodePoolID string) error {
-	logrus.Debugf("delete node pool with ID %s", nodePoolID)
+	logrus.Debugf("[oraclecontainerengine] delete node pool with ID %s", nodePoolID)
 
 	if len(nodePoolID) == 0 {
 		return fmt.Errorf("nodePoolID must be set to delete the node pool")
@@ -843,17 +843,17 @@ func (mgr *ClusterManagerClient) DeleteNodePool(ctx context.Context, nodePoolID 
 
 	deleteNodePoolResp, err := mgr.containerEngineClient.DeleteNodePool(ctx, req)
 	if err != nil {
-		logrus.Debugf("delete node pool request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] delete node pool request failed with err %v", err)
 		return err
 	}
 
 	// wait until node pool deletion work request complete
-	logrus.Debugf("waiting for node pool to be deleted...")
+	logrus.Debugf("[oraclecontainerengine] waiting for node pool to be deleted...")
 	// TODO better to poll instead of sleep
 	time.Sleep(mgr.sleepDuration * time.Second)
 	_, err = waitUntilWorkRequestComplete(mgr.containerEngineClient, deleteNodePoolResp.OpcWorkRequestId)
 	if err != nil {
-		logrus.Debugf("get work request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get work request failed with err %v", err)
 		return err
 	}
 
@@ -862,7 +862,7 @@ func (mgr *ClusterManagerClient) DeleteNodePool(ctx context.Context, nodePoolID 
 
 // DeleteCluster deletes the cluster with the specified ID, or an error.
 func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID string) error {
-	logrus.Debugf("deleting cluster with cluster ID %s", clusterID)
+	logrus.Debugf("[oraclecontainerengine] deleting cluster with cluster ID %s", clusterID)
 
 	if len(clusterID) == 0 {
 		return fmt.Errorf("clusterID must be set to delete the cluster")
@@ -873,17 +873,17 @@ func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID st
 
 	deleteClusterResp, err := mgr.containerEngineClient.DeleteCluster(ctx, req)
 	if err != nil {
-		logrus.Debugf("delete cluster request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] delete cluster request failed with err %v", err)
 		return err
 	}
 
 	// wait until cluster deletion work request complete
-	logrus.Debugf("waiting for cluster to be deleted...")
+	logrus.Debugf("[oraclecontainerengine] waiting for cluster to be deleted...")
 	// initial delay since subsequent back-off function waits longer each time the retry fails
 	time.Sleep(time.Minute * 3)
 	_, err = waitUntilWorkRequestComplete(mgr.containerEngineClient, deleteClusterResp.OpcWorkRequestId)
 	if err != nil {
-		logrus.Debugf("get work request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get work request failed with err %v", err)
 		return err
 	}
 
@@ -894,7 +894,7 @@ func (mgr *ClusterManagerClient) DeleteCluster(ctx context.Context, clusterID st
 // gateways, etc.) with the specified ID, or an error.
 func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) error {
 
-	logrus.Debugf("deleting VCN with VCN ID %s", vcnID)
+	logrus.Debugf("[oraclecontainerengine] deleting VCN with VCN ID %s", vcnID)
 
 	if len(vcnID) == 0 {
 		return fmt.Errorf("vcnID must be set to delete the VCN")
@@ -905,7 +905,7 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 
 	getVCNResp, err := mgr.virtualNetworkClient.GetVcn(ctx, getVCNReq)
 	if err != nil {
-		logrus.Debugf("get VCN failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] get VCN failed with err %v", err)
 		return err
 	}
 
@@ -918,7 +918,7 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	listRouteTblsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
 	rtResp, err := mgr.virtualNetworkClient.ListRouteTables(ctx, listRouteTblsReq)
 	if err != nil {
-		logrus.Debugf("list route tables failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list route tables failed with err %v", err)
 		return err
 	}
 	for _, rt := range rtResp.Items {
@@ -927,10 +927,10 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 		updateRTReq.RtId = rt.Id
 		updateRTReq.RouteRules = []core.RouteRule{}
 
-		logrus.Debugf("removing default route rule from route table %s", *rt.Id)
+		logrus.Debugf("[oraclecontainerengine] removing default route rule from route table %s", *rt.Id)
 		_, err = mgr.virtualNetworkClient.UpdateRouteTable(ctx, updateRTReq)
 		if err != nil {
-			logrus.Debugf("update route table failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] update route table failed with err %v", err)
 			return err
 		}
 	}
@@ -941,16 +941,16 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	listIGsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
 	igsResp, err := mgr.virtualNetworkClient.ListInternetGateways(ctx, listIGsReq)
 	if err != nil {
-		logrus.Debugf("list internet gateway(s) failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list internet gateway(s) failed with err %v", err)
 		return err
 	}
 	for _, ig := range igsResp.Items {
 		deleteIGReq := core.DeleteInternetGatewayRequest{}
 		deleteIGReq.IgId = ig.Id
-		logrus.Debugf("deleting internet gateway %s", *ig.Id)
+		logrus.Debugf("[oraclecontainerengine] deleting internet gateway %s", *ig.Id)
 		_, err = mgr.virtualNetworkClient.DeleteInternetGateway(ctx, deleteIGReq)
 		if err != nil {
-			logrus.Debugf("warning: delete internet gateway failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] warning: delete internet gateway failed with err %v", err)
 			// Continue tearing down.
 		}
 	}
@@ -961,16 +961,16 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	listSubnetsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
 	listSubnetResp, err := mgr.virtualNetworkClient.ListSubnets(ctx, listSubnetsReq)
 	if err != nil {
-		logrus.Debugf("list subnets failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list subnets failed with err %v", err)
 		return err
 	}
 	for _, subnet := range listSubnetResp.Items {
 		deleteSubnetReq := core.DeleteSubnetRequest{}
 		deleteSubnetReq.SubnetId = subnet.Id
-		logrus.Debugf("deleting subnet %s", *subnet.Id)
+		logrus.Debugf("[oraclecontainerengine] deleting subnet %s", *subnet.Id)
 		_, err := mgr.virtualNetworkClient.DeleteSubnet(ctx, deleteSubnetReq)
 		if err != nil {
-			logrus.Debugf("warning: delete subnet failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] warning: delete subnet failed with err %v", err)
 			// Continue tearing down.
 		}
 	}
@@ -983,16 +983,16 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	listSecurityListsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
 	listSecurityListsResp, err := mgr.virtualNetworkClient.ListSecurityLists(ctx, listSecurityListsReq)
 	if err != nil {
-		logrus.Debugf("list security lists failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list security lists failed with err %v", err)
 		return err
 	}
 	for _, securityList := range listSecurityListsResp.Items {
 		deleteSecurityListReq := core.DeleteSecurityListRequest{}
 		deleteSecurityListReq.SecurityListId = securityList.Id
-		logrus.Debugf("deleting security list (%s)", *securityList.Id)
+		logrus.Debugf("[oraclecontainerengine] deleting security list (%s)", *securityList.Id)
 		_, err := mgr.virtualNetworkClient.DeleteSecurityList(ctx, deleteSecurityListReq)
 		if err != nil {
-			logrus.Debugf("warning: delete security list failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] warning: delete security list failed with err %v", err)
 			// Continue tearing down.
 		}
 	}
@@ -1001,10 +1001,10 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	for _, rt := range rtResp.Items {
 		deleteRTReq := core.DeleteRouteTableRequest{}
 		deleteRTReq.RtId = rt.Id
-		logrus.Debugf("removing route table %s", *rt.Id)
+		logrus.Debugf("[oraclecontainerengine] removing route table %s", *rt.Id)
 		_, err = mgr.virtualNetworkClient.DeleteRouteTable(ctx, deleteRTReq)
 		if err != nil {
-			logrus.Debugf("warning: delete route table failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] warning: delete route table failed with err %v", err)
 			// Continue tearing down.
 		}
 	}
@@ -1015,16 +1015,16 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	listNGsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
 	ngsResp, err := mgr.virtualNetworkClient.ListNatGateways(ctx, listNGsReq)
 	if err != nil {
-		logrus.Debugf("list NAT gateway(s) failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list NAT gateway(s) failed with err %v", err)
 		return err
 	}
 	for _, ng := range ngsResp.Items {
 		deleteNGReq := core.DeleteNatGatewayRequest{}
 		deleteNGReq.NatGatewayId = ng.Id
-		logrus.Debugf("deleting NAT gateway %s", *ng.Id)
+		logrus.Debugf("[oraclecontainerengine] deleting NAT gateway %s", *ng.Id)
 		_, err = mgr.virtualNetworkClient.DeleteNatGateway(ctx, deleteNGReq)
 		if err != nil {
-			logrus.Debugf("warning: delete NAT gateway failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] warning: delete NAT gateway failed with err %v", err)
 			// Continue tearing down.
 		}
 	}
@@ -1035,16 +1035,16 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	listSGsReq.CompartmentId = getVCNResp.Vcn.CompartmentId
 	sgResp, err := mgr.virtualNetworkClient.ListServiceGateways(ctx, listSGsReq)
 	if err != nil {
-		logrus.Debugf("list Service gateway(s) failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list Service gateway(s) failed with err %v", err)
 		return err
 	}
 	for _, sg := range sgResp.Items {
 		deleteSGReq := core.DeleteServiceGatewayRequest{}
 		deleteSGReq.ServiceGatewayId = sg.Id
-		logrus.Debugf("deleting Service gateway %s", *sg.Id)
+		logrus.Debugf("[oraclecontainerengine] deleting Service gateway %s", *sg.Id)
 		_, err = mgr.virtualNetworkClient.DeleteServiceGateway(ctx, deleteSGReq)
 		if err != nil {
-			logrus.Debugf("warning: delete Service gateway failed with err %v", err)
+			logrus.Debugf("[oraclecontainerengine] warning: delete Service gateway failed with err %v", err)
 			// Continue tearing down.
 		}
 	}
@@ -1053,10 +1053,10 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 	vcnRequest := core.DeleteVcnRequest{}
 	vcnRequest.VcnId = common.String(vcnID)
 
-	logrus.Debugf("deleting VCN (%s)", vcnID)
+	logrus.Debugf("[oraclecontainerengine] deleting VCN (%s)", vcnID)
 	_, err = mgr.virtualNetworkClient.DeleteVcn(ctx, vcnRequest)
 	if err != nil {
-		logrus.Debugf("delete virtual-network request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] delete virtual-network request failed with err %v", err)
 		return err
 	}
 
@@ -1066,7 +1066,7 @@ func (mgr *ClusterManagerClient) DeleteVCN(ctx context.Context, vcnID string) er
 // GetKubeconfigByClusterID is a wrapper for the CreateKubeconfig operation that
 // that handles errors and unmarshaling, or an error.
 func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, clusterID, region string) (store.KubeConfig, string, error) {
-	logrus.Debugf("getting KUBECONFIG with cluster ID %s", clusterID)
+	logrus.Debugf("[oraclecontainerengine] getting KUBECONFIG with cluster ID %s", clusterID)
 
 	kubeconfig := &store.KubeConfig{}
 
@@ -1078,33 +1078,33 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 		ClusterId: &clusterID,
 	})
 	if err != nil {
-		logrus.Debugf("error creating kubeconfig %v", err)
+		logrus.Debugf("[oraclecontainerengine] error creating kubeconfig %v", err)
 		return store.KubeConfig{}, "", err
 	}
 
 	content, err := ioutil.ReadAll(response.Content)
 	if err != nil {
-		logrus.Debugf("error reading kubeconfig response content %v", err)
+		logrus.Debugf("[oraclecontainerengine] error reading kubeconfig response content %v", err)
 		return store.KubeConfig{}, "", err
 	}
 
 	err = yaml.Unmarshal(content, kubeconfig)
 	if err != nil {
-		logrus.Debugf("error unmarshalling kubeconfig %v", err)
+		logrus.Debugf("[oraclecontainerengine] error unmarshalling kubeconfig %v", err)
 		return store.KubeConfig{}, "", nil
 	}
 
 	if len(kubeconfig.Users) > 0 && kubeconfig.Users[0].User.Token == "" {
 		// Generate the token here rather than using exec credentials, which is
 		// not supported by rancher's KubeConfig and ClusterInfo types.
-		logrus.Info("generating a /v2 (exec based) kubeconfig token")
+		logrus.Info("[oraclecontainerengine] generating a /v2 (exec based) kubeconfig token")
 		requestSigner := common.RequestSigner(mgr.configuration, common.DefaultGenericHeaders(), common.DefaultBodyHeaders())
 		interceptor := func(r *http.Request) error {
 			return nil
 		}
 		expiringToken, err := generateToken(newTokenSigner(requestSigner, interceptor), region, clusterID)
 		if err != nil {
-			logrus.Debugf("error generating /v2 kubeconfig token %v", err)
+			logrus.Debugf("[oraclecontainerengine] error generating /v2 kubeconfig token %v", err)
 			return store.KubeConfig{}, "", nil
 		}
 		kubeconfig.Users[0].User.Token = expiringToken
@@ -1118,9 +1118,9 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
 
 	if isPrivate {
-		logrus.Debugf("creating public regional node subnet in VCN ID %s", vcnID)
+		logrus.Debugf("[oraclecontainerengine] creating public regional node subnet in VCN ID %s", vcnID)
 	} else {
-		logrus.Debugf("creating private regional node subnet in VCN ID %s", vcnID)
+		logrus.Debugf("[oraclecontainerengine] creating private regional node subnet in VCN ID %s", vcnID)
 	}
 
 	var subnetIds = []string{}
@@ -1140,7 +1140,7 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 		nil,
 		common.String(vcnID), common.String(subnetRouteID), isPrivate, securityListIds, state)
 	if err != nil {
-		logrus.Debugf("create new node subnet failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new node subnet failed with err %v", err)
 		return subnetIds, err
 	}
 	subnetIds = append(subnetIds, *subnet1.Id)
@@ -1152,9 +1152,9 @@ func (mgr *ClusterManagerClient) CreateNodeSubnets(ctx context.Context, state *S
 func (mgr *ClusterManagerClient) CreateControlPlaneSubnet(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) (string, error) {
 
 	if isPrivate {
-		logrus.Debugf("creating private regional control-plane subnet in VCN ID %s", vcnID)
+		logrus.Debugf("[oraclecontainerengine] creating private regional control-plane subnet in VCN ID %s", vcnID)
 	} else {
-		logrus.Debugf("creating public regional control-plane subnet in VCN ID %s", vcnID)
+		logrus.Debugf("[oraclecontainerengine] creating public regional control-plane subnet in VCN ID %s", vcnID)
 	}
 
 	var subnetId = ""
@@ -1179,7 +1179,7 @@ func (mgr *ClusterManagerClient) CreateControlPlaneSubnet(ctx context.Context, s
 		nil,
 		common.String(vcnID), routeId, isPrivate, securityListIds, state)
 	if err != nil {
-		logrus.Debugf("create new control-plane subnet failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new control-plane subnet failed with err %v", err)
 		return subnetId, err
 	}
 	subnetId = *subnet1.Id
@@ -1190,7 +1190,7 @@ func (mgr *ClusterManagerClient) CreateControlPlaneSubnet(ctx context.Context, s
 // CreateServiceSubnets creates the regional (public) service subnet (i.e. load balancer
 // subnet), or an error.
 func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
-	logrus.Debugf("creating service / LB subnet(s) in VCN ID %s", vcnID)
+	logrus.Debugf("[oraclecontainerengine] creating service / LB subnet(s) in VCN ID %s", vcnID)
 
 	var subnetIds = []string{}
 	if state == nil {
@@ -1211,7 +1211,7 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 		nil,
 		common.String(vcnID), nil, isPrivate, securityListIds, state)
 	if err != nil {
-		logrus.Debugf("create new service subnet failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new service subnet failed with err %v", err)
 		return subnetIds, err
 	}
 	subnetIds = append(subnetIds, *subnet.Id)
@@ -1221,7 +1221,7 @@ func (mgr *ClusterManagerClient) CreateServiceSubnets(ctx context.Context, state
 
 // CreateBastionSubnets creates the (public) bastion subnet(s), or an error.
 func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state *State, vcnID, subnetRouteID string, isPrivate bool, securityListIds []string) ([]string, error) {
-	logrus.Debugf("creating bastion subnet(s) in VCN ID %s", vcnID)
+	logrus.Debugf("[oraclecontainerengine] creating bastion subnet(s) in VCN ID %s", vcnID)
 
 	var subnetIds = []string{}
 	if state == nil {
@@ -1248,7 +1248,7 @@ func (mgr *ClusterManagerClient) CreateBastionSubnets(ctx context.Context, state
 		nil,
 		common.String(vcnID), nil, isPrivate, securityListIds, state)
 	if err != nil {
-		logrus.Debugf("create new bastion subnet failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create new bastion subnet failed with err %v", err)
 		return subnetIds, err
 	}
 	subnetIds = append(subnetIds, *subnet.Id)
@@ -1282,7 +1282,7 @@ func (mgr *ClusterManagerClient) CreateSubnetWithDetails(displayName *string, ci
 
 	response, err := mgr.virtualNetworkClient.CreateSubnet(ctx, request)
 	if err != nil {
-		logrus.Debugf("create subnet request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create subnet request failed with err %v", err)
 		return core.Subnet{}, err
 	}
 
@@ -1311,7 +1311,7 @@ func (mgr *ClusterManagerClient) CreateSubnetWithDetails(displayName *string, ci
 // rule, etc., or an error.
 func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (string, string, []string, []string, error) {
 
-	logrus.Debugf("create virtual cloud network called.")
+	logrus.Debugf("[oraclecontainerengine] create virtual cloud network called.")
 	if state == nil {
 		return "", "", nil, nil, fmt.Errorf("valid state is required")
 	}
@@ -1328,7 +1328,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 
 	r, err := mgr.virtualNetworkClient.CreateVcn(ctx, vcnRequest)
 	if err != nil {
-		logrus.Debugf("create virtual-network request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] create virtual-network request failed with err %v", err)
 		return "", "", nil, nil, err
 	}
 	// TODO better to poll instead of sleep
@@ -1352,7 +1352,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 	routeTablesReq.CompartmentId = common.String(state.CompartmentID)
 	routeTablesResp, err := mgr.virtualNetworkClient.ListRouteTables(ctx, routeTablesReq)
 	if err != nil {
-		logrus.Debugf("list route tables request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] list route tables request failed with err %v", err)
 		return "", "", nil, nil, err
 	}
 	if len(routeTablesResp.Items) != 1 {
@@ -1372,7 +1372,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 
 	_, err = mgr.virtualNetworkClient.UpdateRouteTable(ctx, updateRouteTableReq)
 	if err != nil {
-		logrus.Debugf("update route table request failed with err %v", err)
+		logrus.Debugf("[oraclecontainerengine] update route table request failed with err %v", err)
 		return "", "", nil, nil, err
 	}
 
@@ -1400,7 +1400,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 			}
 		}
 		if allServices == nil {
-			logrus.Debug("failed to retrieve Oracle Services Network")
+			logrus.Debug("[oraclecontainerengine] failed to retrieve Oracle Services Network")
 			return "", "", nil, nil, err
 		}
 		serviceGatewayReq := core.CreateServiceGatewayRequest{
@@ -1480,7 +1480,7 @@ func (mgr *ClusterManagerClient) CreateVCNAndNetworkResources(state *State) (str
 			helpers.FatalIfError(err)
 
 			// User must configure bastion Ingress and any additional egress besides VCN CIDR
-			logrus.Info("Bastion subnet created. A bastion host and security rules must be configured manually.")
+			logrus.Info("[oraclecontainerengine] Bastion subnet created. A bastion host and security rules must be configured manually.")
 		}
 	}
 
