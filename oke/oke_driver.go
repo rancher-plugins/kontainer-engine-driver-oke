@@ -411,6 +411,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The name of an existing virtual network to be used for OKE cluster creation",
 	}
+	driverFlag.Options["control-plane-subnet-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The name of the existing subnet to use for the Kubernetes API endpoint",
+	}
 	driverFlag.Options["load-balancer-subnet-name-1"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The name of the first existing subnet to use for Kubernetes services / LB",
