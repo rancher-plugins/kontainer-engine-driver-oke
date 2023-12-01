@@ -27,11 +27,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oracle/oci-go-sdk/v38/common"
-	"github.com/oracle/oci-go-sdk/v38/containerengine"
-	"github.com/oracle/oci-go-sdk/v38/core"
-	"github.com/oracle/oci-go-sdk/v38/example/helpers"
-	"github.com/oracle/oci-go-sdk/v38/identity"
+	"github.com/oracle/oci-go-sdk/v65/common"
+	"github.com/oracle/oci-go-sdk/v65/containerengine"
+	"github.com/oracle/oci-go-sdk/v65/core"
+	"github.com/oracle/oci-go-sdk/v65/example/helpers"
+	"github.com/oracle/oci-go-sdk/v65/identity"
 	"github.com/rancher/kontainer-engine/store"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
@@ -266,15 +266,14 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	if err != nil {
 		logrus.Printf("[oraclecontainerengine] Node image ID not found")
 		return err
+	}
+	logrus.Printf("[oraclecontainerengine] Node image ID found %v", image)
+	// Set a custom boot volume size if set
+	if state.NodePool.CustomBootVolumeSize != 0 {
+		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image),
+			BootVolumeSizeInGBs: common.Int64(state.NodePool.CustomBootVolumeSize)}
 	} else {
-		logrus.Printf("[oraclecontainerengine] Node image ID found %v", image)
-		// Set a custom boot volume size if set
-		if state.NodePool.CustomBootVolumeSize != 0 {
-			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image),
-				BootVolumeSizeInGBs: common.Int64(state.NodePool.CustomBootVolumeSize)}
-		} else {
-			npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image)}
-		}
+		npReq.NodeSourceDetails = containerengine.NodeSourceViaImageDetails{ImageId: common.String(image)}
 	}
 
 	req := identity.ListAvailabilityDomainsRequest{}

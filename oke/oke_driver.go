@@ -23,7 +23,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/oracle/oci-go-sdk/v38/common"
+	"github.com/oracle/oci-go-sdk/v65/common"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
 	"github.com/rancher/kontainer-engine/types"
@@ -730,7 +730,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		controlPlaneSubnetID, err = oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ControlPlaneSubnetName)
 		if err != nil {
 			// For backwards compatibility, we can create a cluster without specifying the control-plane subnet.
-			logrus.Info("[oraclecontainerengine] warning: unable to look up the Id the Kubernetes control-plane subnet %s %v", state.Network.ControlPlaneSubnetName, err)
+			logrus.Infof("[oraclecontainerengine] warning: unable to look up the Id the Kubernetes control-plane subnet %s %v", state.Network.ControlPlaneSubnetName, err)
 		}
 
 		serviceSubnet1Id, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ServiceLBSubnet1Name)
@@ -1204,14 +1204,14 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 	serviceAccount := &v1.ServiceAccount{ObjectMeta: metav1.ObjectMeta{Name: name}}
 
 	// Create new service account, if it does not exist already
-	_, err = clientset.CoreV1().ServiceAccounts(namespace).Create(serviceAccount)
+	_, err = clientset.CoreV1().ServiceAccounts(namespace).Create(context.Background(), serviceAccount, metav1.CreateOptions{})
 	if err != nil {
 		if !apierror.IsAlreadyExists(err) {
 			return "", err
 		}
 	}
 
-	serviceAccount, err = clientset.CoreV1().ServiceAccounts(namespace).Get(name, metav1.GetOptions{})
+	serviceAccount, err = clientset.CoreV1().ServiceAccounts(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -1235,7 +1235,7 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 		Type: v1.SecretTypeServiceAccountToken,
 	}
 
-	_, err = clientset.CoreV1().Secrets(namespace).Create(secretTemplate)
+	_, err = clientset.CoreV1().Secrets(namespace).Create(context.Background(), secretTemplate, metav1.CreateOptions{})
 	if err != nil {
 		if !apierror.IsAlreadyExists(err) {
 			return "", err
@@ -1244,7 +1244,7 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 	// wait a few seconds for authentication token to populate
 	time.Sleep(10 * time.Second)
 
-	secretObj, err := clientset.CoreV1().Secrets(namespace).Get(serviceAccount.Name+"-token", metav1.GetOptions{})
+	secretObj, err := clientset.CoreV1().Secrets(namespace).Get(context.Background(), serviceAccount.Name+"-token", metav1.GetOptions{})
 	if err != nil {
 		return "", err
 	}
@@ -1261,7 +1261,7 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 		},
 	}
 
-	_, err = clientset.RbacV1().ClusterRoleBindings().Create(clusterRoleBinding)
+	_, err = clientset.RbacV1().ClusterRoleBindings().Create(context.Background(), clusterRoleBinding, metav1.CreateOptions{})
 	if err != nil {
 		if !apierror.IsAlreadyExists(err) {
 			return "", err
@@ -1269,7 +1269,7 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 	}
 
 	// Look up cluster role binding
-	_, err = clientset.RbacV1().ClusterRoleBindings().Get(clusterRoleBinding.Name, metav1.GetOptions{})
+	_, err = clientset.RbacV1().ClusterRoleBindings().Get(context.Background(), clusterRoleBinding.Name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("error getting cluster role binding: %v", err)
 	}
