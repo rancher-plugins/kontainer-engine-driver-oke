@@ -37,7 +37,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
-	"os"
 	"strings"
 	"time"
 )
@@ -1172,17 +1171,13 @@ func remove(slice []string, s int) []string {
 
 func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error) {
 
-	tmpFile, err := ioutil.TempFile("/tmp", "kubeconfig")
-	err = ioutil.WriteFile(tmpFile.Name(), kubeconfig, 0640)
-	defer os.Remove(tmpFile.Name())
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+		return nil, fmt.Errorf("error building Kubernetes rest config: %s", err.Error())
 	}
-
-	cfg, err := clientcmd.BuildConfigFromFlags("", tmpFile.Name())
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+		return nil, fmt.Errorf("error building Kubernetes clientset: %s", err.Error())
 	}
 
 	return clientset, nil
