@@ -1172,12 +1172,15 @@ func remove(slice []string, s int) []string {
 
 func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error) {
 
-	tmpFile, err := ioutil.TempFile("/tmp", "kubeconfig")
-	err = ioutil.WriteFile(tmpFile.Name(), kubeconfig, 0640)
-	defer os.Remove(tmpFile.Name())
+	fmt.Printf("DEBUG JESSE %s\n", kubeconfig)
+	tmpFile, err := os.CreateTemp("", "kubeconfig")
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+		return nil, fmt.Errorf("error creating temp file: %s", err.Error())
 	}
+	if err := os.WriteFile(tmpFile.Name(), kubeconfig, 0640); err != nil {
+		return nil, fmt.Errorf("error writing kubeconfig: %s", err.Error())
+	}
+	defer os.Remove(tmpFile.Name())
 
 	cfg, err := clientcmd.BuildConfigFromFlags("", tmpFile.Name())
 	clientset, err := kubernetes.NewForConfig(cfg)
