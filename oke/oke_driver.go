@@ -30,7 +30,6 @@ import (
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"gopkg.in/yaml.v2"
-	"io/ioutil"
 	v1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierror "k8s.io/apimachinery/pkg/api/errors"
@@ -593,14 +592,14 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	}
 
 	if state.PrivateKeyContents == "" && state.PrivateKeyPath != "" {
-		privateKeyBytes, err := ioutil.ReadFile(state.PrivateKeyPath)
+		privateKeyBytes, err := os.ReadFile(state.PrivateKeyPath)
 		if err == nil {
 			state.PrivateKeyContents = string(privateKeyBytes)
 		}
 	}
 
 	if state.NodePool.NodePublicSSHKeyContents == "" && state.NodePool.NodePublicSSHKeyPath != "" {
-		publicKeyBytes, err := ioutil.ReadFile(state.NodePool.NodePublicSSHKeyPath)
+		publicKeyBytes, err := os.ReadFile(state.NodePool.NodePublicSSHKeyPath)
 		if err == nil {
 			state.NodePool.NodePublicSSHKeyContents = string(publicKeyBytes)
 		}
@@ -613,7 +612,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 			state.NodePool.NodeUserDataContents = base64.StdEncoding.EncodeToString(userDataBytes)
 		}
 	} else if state.NodePool.NodeUserDataContents == "" && state.NodePool.NodeUserDataPath != "" {
-		userDataBytes, err := ioutil.ReadFile(state.NodePool.NodeUserDataPath)
+		userDataBytes, err := os.ReadFile(state.NodePool.NodeUserDataPath)
 		if err == nil {
 			if !isBase64Encoded(userDataBytes) {
 				// Files was not base64 encoded.
@@ -1172,17 +1171,13 @@ func remove(slice []string, s int) []string {
 
 func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error) {
 
-	tmpFile, err := ioutil.TempFile("/tmp", "kubeconfig")
-	err = ioutil.WriteFile(tmpFile.Name(), kubeconfig, 0640)
-	defer os.Remove(tmpFile.Name())
+	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+		return nil, fmt.Errorf("error building Kubernetes rest config: %s", err.Error())
 	}
-
-	cfg, err := clientcmd.BuildConfigFromFlags("", tmpFile.Name())
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("error building kubeconfig: %s", err.Error())
+		return nil, fmt.Errorf("error building Kubernetes clientset: %s", err.Error())
 	}
 
 	return clientset, nil

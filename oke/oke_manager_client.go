@@ -22,7 +22,7 @@ and VCN.
 import (
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -1081,7 +1081,7 @@ func (mgr *ClusterManagerClient) GetKubeconfigByClusterID(ctx context.Context, c
 		return store.KubeConfig{}, "", err
 	}
 
-	content, err := ioutil.ReadAll(response.Content)
+	content, err := io.ReadAll(response.Content)
 	if err != nil {
 		logrus.Debugf("[oraclecontainerengine] error reading kubeconfig response content %v", err)
 		return store.KubeConfig{}, "", err
