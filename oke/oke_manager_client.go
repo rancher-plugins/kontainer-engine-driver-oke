@@ -355,6 +355,8 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 
 	// wait until cluster creation work request complete
 	logrus.Debugf("[oraclecontainerengine] waiting for node pool to be created...")
+	// initial delay since subsequent back-off function waits longer each time the retry fails
+	time.Sleep(time.Minute * 5)
 	workReqRespNodePool, err := waitUntilWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
 	if err != nil {
 		logrus.Debugf("[oraclecontainerengine] get work request failed with err %v", err)
@@ -1797,8 +1799,12 @@ func waitUntilWorkRequestComplete(client containerengine.ContainerEngineClient, 
 
 	// retry GetWorkRequest call until operation is no longer waiting to start or in in-progress
 	shouldRetryFunc := func(r common.OCIOperationResponse) bool {
-		return r.Response.(containerengine.GetWorkRequestResponse).Status == containerengine.WorkRequestStatusInProgress ||
-			r.Response.(containerengine.GetWorkRequestResponse).Status == containerengine.WorkRequestStatusAccepted
+		if r.Response.(containerengine.GetWorkRequestResponse).Status == containerengine.WorkRequestStatusInProgress ||
+			r.Response.(containerengine.GetWorkRequestResponse).Status == containerengine.WorkRequestStatusAccepted {
+			time.Sleep(30 * time.Second)
+			return true
+		}
+		return false
 	}
 
 	getWorkReq := containerengine.GetWorkRequestRequest{
