@@ -179,6 +179,12 @@ type NodeConfiguration struct {
 	CustomBootVolumeSize int64
 	// The optional number of OCPUs for each node (each OCPU is equivalent to one physical core of an Intel Xeon processor)
 	FlexOCPUs int64
+	// The optional amount of memory in GBs for each node
+	FlexMemoryInGBs int64
+	// Cordon and drain Eviction grace period (mins)
+	EvictionGraceDuration string
+	// Whether to send a SIGKILL signal if a pod does not terminate within the specified grace period
+	ForceDeleteAfterGraceDuration bool
 }
 
 func NewDriver() types.Driver {
@@ -522,16 +528,19 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.WorkerNodeIngressCidr = options.GetValueFromDriverOptions(driverOptions, types.StringType, "worker-node-ingress-cidr", "WorkerNodeIngressCidr", "workerNodeIngressCidr").(string)
 
 	state.NodePool = NodeConfiguration{
-		FlexOCPUs:                options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-ocpus", "flexOcpus").(int64),
-		CustomBootVolumeSize:     options.GetValueFromDriverOptions(driverOptions, types.IntType, "custom-boot-volume-size", "customBootVolumeSize").(int64),
-		NodeImageName:            options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image", "nodeImage").(string),
-		NodeShape:                options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeShape").(string),
-		NodePublicSSHKeyPath:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-path", "nodePublicKeyPath").(string),
-		NodePublicSSHKeyContents: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-contents", "nodePublicKeyContents").(string),
-		NodeUserDataPath:         options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-user-data-path", "nodeUserDataPath").(string),
-		NodeUserDataContents:     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-user-data-contents", "nodeUserDataContents").(string),
-		QuantityPerSubnet:        options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-per-subnet", "quantityPerSubnet").(int64),
-		LimitNodeCount:           options.GetValueFromDriverOptions(driverOptions, types.IntType, "limit-node-count", "limitNodeCount").(int64),
+		EvictionGraceDuration:         options.GetValueFromDriverOptions(driverOptions, types.StringType, "eviction-grace-duration", "evictionGraceDuration").(string),
+		ForceDeleteAfterGraceDuration: options.GetValueFromDriverOptions(driverOptions, types.BoolType, "force-delete-after-grace-duration", "forceDeleteAfterGraceDuration").(bool),
+		FlexOCPUs:                     options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-ocpus", "flexOcpus").(int64),
+		FlexMemoryInGBs:               options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-memory-in-gbs", "flexMemoryInGBs").(int64),
+		CustomBootVolumeSize:          options.GetValueFromDriverOptions(driverOptions, types.IntType, "custom-boot-volume-size", "customBootVolumeSize").(int64),
+		NodeImageName:                 options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image", "nodeImage").(string),
+		NodeShape:                     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeShape").(string),
+		NodePublicSSHKeyPath:          options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-path", "nodePublicKeyPath").(string),
+		NodePublicSSHKeyContents:      options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-public-key-contents", "nodePublicKeyContents").(string),
+		NodeUserDataPath:              options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-user-data-path", "nodeUserDataPath").(string),
+		NodeUserDataContents:          options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-user-data-contents", "nodeUserDataContents").(string),
+		QuantityPerSubnet:             options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-per-subnet", "quantityPerSubnet").(int64),
+		LimitNodeCount:                options.GetValueFromDriverOptions(driverOptions, types.IntType, "limit-node-count", "limitNodeCount").(int64),
 	}
 
 	state.Network = NetworkConfiguration{
@@ -872,6 +881,12 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 		state.KubernetesVersion = newState.KubernetesVersion
 	}
 
+	// Reconcile any other node pool changes besides version and count
+	err = d.ProcessOtherNodePoolUpdates(ctx, info, opts)
+	if err != nil {
+		return nil, err
+	}
+
 	logrus.Info("[oraclecontainerengine] Cluster updates may continue asynchronously")
 	return info, storeState(info, state)
 }
@@ -1099,6 +1114,51 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 
 	// update version is currently asynchronous
 	logrus.Info("[oraclecontainerengine] Cluster version (masters and node pools) updated successfully")
+	return nil
+}
+
+func (d *OKEDriver) ProcessOtherNodePoolUpdates(ctx context.Context, info *types.ClusterInfo, opts *types.DriverOptions) error {
+	logrus.Debugf("[oraclecontainerengine] ProcessOtherNodePoolUpdates(...) called")
+
+	state, err := GetState(info)
+	if err != nil {
+		return err
+	}
+	oke, err := constructClusterManagerClient(ctx, state)
+	if err != nil {
+		return errors.Wrap(err, "could not get Oracle Container Engine client")
+	}
+
+	newState, err := GetStateFromOpts(opts)
+	if err != nil {
+		return err
+	}
+
+	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
+	if err != nil {
+		return errors.Wrap(err, "could not retrieve node pool id")
+	}
+
+	var npErr error
+	for _, nodePoolID := range nodePoolIds {
+		nodePool, err := oke.GetNodePoolByID(ctx, nodePoolID)
+		if err != nil {
+			logrus.Debugf("[oraclecontainerengine] could not retrieve node pool")
+			continue
+		}
+		logrus.Infof("[oraclecontainerengine] Reconciling other changes for node pool %s", *nodePool.Id)
+		nextNpErr := oke.ReconcileNodePool(ctx, *nodePool.Id, &newState)
+		if nextNpErr != nil {
+			npErr = nextNpErr
+			logrus.Debugf("[oraclecontainerengine] warning: could not reconcile node pool with Rancher state in cluster.management.cattle.io")
+		}
+	}
+
+	if npErr != nil {
+		return errors.Wrap(npErr, "could not reconcile node pool")
+	}
+	// update version is currently asynchronous
+	logrus.Info("[oraclecontainerengine] Node pools updated successfully")
 	return nil
 }
 

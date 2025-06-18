@@ -531,6 +531,192 @@ func (mgr *ClusterManagerClient) UpdateNodepoolKubernetesVersion(ctx context.Con
 	return nil
 }
 
+// ReconcileNodePool attempts to reconcile the node pool state Rancher tracks in cluster.management.cattle.io with the node pool in OCI.
+func (mgr *ClusterManagerClient) ReconcileNodePool(ctx context.Context, nodePoolID string, state *State) error {
+
+	logrus.Debugf("[oraclecontainerengine] reconciling node pool ID %s", nodePoolID)
+
+	if len(nodePoolID) == 0 {
+		return fmt.Errorf("nodePoolID must be set to reconcile the node pool")
+	}
+
+	npReq := containerengine.UpdateNodePoolRequest{}
+	npReq.NodePoolId = common.String(nodePoolID)
+
+	currentNodePool, err := mgr.GetNodePoolByID(ctx, nodePoolID)
+	if err != nil {
+		logrus.Debugf("[oraclecontainerengine] node pool lookup failed with error %v", err)
+		return err
+	}
+
+	updateImageId := false
+	updateBootVolumeSizeInGBs := false
+	updateNodeShape := false
+	updateEvictionGraceDuration := false
+	updateForceDeleteAfterGraceDuration := false
+	updateOcpus := false
+	updateFlexMemoryInGBs := false
+	updateKmsKeyId := false
+	updateNodePublicSSHKeyContents := false
+	updateNodeUserDataContents := false
+
+	desiredImageId := ""
+	if state.NodePool.NodeImageName != "" {
+		desiredImageId, err = mgr.getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
+
+		if err == nil && desiredImageId != "" {
+			sourceDetails, ok := currentNodePool.NodeSourceDetails.(containerengine.NodeSourceViaImageDetails)
+			if !ok || sourceDetails.ImageId == nil || *sourceDetails.ImageId != desiredImageId {
+				updateImageId = true
+			}
+		}
+	}
+
+	if state.NodePool.EvictionGraceDuration != "" &&
+		(currentNodePool.NodeEvictionNodePoolSettings == nil || currentNodePool.NodeEvictionNodePoolSettings.EvictionGraceDuration == nil || *currentNodePool.NodeEvictionNodePoolSettings.EvictionGraceDuration != state.NodePool.EvictionGraceDuration) {
+		updateEvictionGraceDuration = true
+	}
+
+	if currentNodePool.NodeEvictionNodePoolSettings == nil || currentNodePool.NodeEvictionNodePoolSettings.IsForceDeleteAfterGraceDuration == nil || *currentNodePool.NodeEvictionNodePoolSettings.IsForceDeleteAfterGraceDuration != state.NodePool.ForceDeleteAfterGraceDuration {
+		updateForceDeleteAfterGraceDuration = true
+	}
+
+	if state.NodePool.NodeShape != "" &&
+		(currentNodePool.NodeShape == nil || *currentNodePool.NodeShape != state.NodePool.NodeShape) {
+		updateNodeShape = true
+	}
+
+	if state.NodePool.CustomBootVolumeSize > 0 {
+		sourceDetails, ok := currentNodePool.NodeSourceDetails.(containerengine.NodeSourceViaImageDetails)
+		if !ok || sourceDetails.BootVolumeSizeInGBs == nil || *sourceDetails.BootVolumeSizeInGBs != state.NodePool.CustomBootVolumeSize {
+			updateBootVolumeSizeInGBs = true
+		}
+	}
+
+	if state.NodePool.FlexOCPUs > 0 &&
+		(currentNodePool.NodeShapeConfig == nil ||
+			currentNodePool.NodeShapeConfig.Ocpus == nil ||
+			*currentNodePool.NodeShapeConfig.Ocpus != float32(state.NodePool.FlexOCPUs)) {
+		updateOcpus = true
+	}
+
+	if state.NodePool.FlexMemoryInGBs > 0 &&
+		(currentNodePool.NodeShapeConfig == nil ||
+			currentNodePool.NodeShapeConfig.MemoryInGBs == nil ||
+			*currentNodePool.NodeShapeConfig.MemoryInGBs != float32(state.NodePool.FlexMemoryInGBs)) {
+		updateFlexMemoryInGBs = true
+	}
+
+	if state.KmsKeyID != "" &&
+		(currentNodePool.NodeConfigDetails == nil ||
+			currentNodePool.NodeConfigDetails.KmsKeyId == nil ||
+			*currentNodePool.NodeConfigDetails.KmsKeyId != state.KmsKeyID) {
+		updateKmsKeyId = true
+	}
+
+	if state.NodePool.NodePublicSSHKeyContents != "" &&
+		(currentNodePool.SshPublicKey == nil ||
+			*currentNodePool.SshPublicKey != state.NodePool.NodePublicSSHKeyContents) {
+		updateNodePublicSSHKeyContents = true
+	}
+
+	if state.NodePool.NodeUserDataContents != "" {
+		if currentNodePool.NodeMetadata == nil {
+			updateNodeUserDataContents = true
+		} else if val, ok := currentNodePool.NodeMetadata["user_data"]; !ok || val != state.NodePool.NodeUserDataContents {
+			updateNodeUserDataContents = true
+		}
+	}
+
+	if updateImageId || updateBootVolumeSizeInGBs || updateNodeShape || updateEvictionGraceDuration || updateForceDeleteAfterGraceDuration || updateOcpus || updateFlexMemoryInGBs || updateKmsKeyId || updateNodePublicSSHKeyContents || updateNodeUserDataContents {
+		diffs := containerengine.UpdateNodePoolRequest{
+			NodePoolId: common.String(nodePoolID),
+		}
+
+		if updateNodeShape {
+			diffs.NodeShape = common.String(state.NodePool.NodeShape)
+		}
+
+		if updateBootVolumeSizeInGBs || updateImageId {
+			// Must update all of updateNodeSourceDetails
+			updateNodeSourceDetails, _ := currentNodePool.NodeSourceDetails.(containerengine.NodeSourceViaImageDetails)
+
+			if updateImageId {
+				updateNodeSourceDetails.ImageId = common.String(desiredImageId)
+			}
+			if updateBootVolumeSizeInGBs {
+				updateNodeSourceDetails.BootVolumeSizeInGBs = &state.NodePool.CustomBootVolumeSize
+			}
+			diffs.NodeSourceDetails = updateNodeSourceDetails
+		}
+		if updateFlexMemoryInGBs || updateOcpus {
+			// Must update all of UpdateNodeShapeConfigDetails
+			updateNodeShapeConfigDetails := (*containerengine.UpdateNodeShapeConfigDetails)(currentNodePool.NodeShapeConfig)
+			if updateNodeShapeConfigDetails == nil {
+				updateNodeShapeConfigDetails = &containerengine.UpdateNodeShapeConfigDetails{}
+			}
+
+			if updateFlexMemoryInGBs {
+				updateNodeShapeConfigDetails.MemoryInGBs = common.Float32(float32(state.NodePool.FlexMemoryInGBs))
+
+			}
+			if updateOcpus {
+				updateNodeShapeConfigDetails.Ocpus = common.Float32(float32(state.NodePool.FlexOCPUs))
+			}
+			diffs.NodeShapeConfig = updateNodeShapeConfigDetails
+		}
+
+		if updateKmsKeyId {
+			updateNodePoolNodeConfigDetails := (*containerengine.UpdateNodePoolNodeConfigDetails)(currentNodePool.NodeConfigDetails)
+			if updateNodePoolNodeConfigDetails == nil {
+				updateNodePoolNodeConfigDetails = &containerengine.UpdateNodePoolNodeConfigDetails{}
+			}
+
+			updateNodePoolNodeConfigDetails.KmsKeyId = common.String(state.KmsKeyID)
+			diffs.NodeConfigDetails = updateNodePoolNodeConfigDetails
+		}
+
+		if updateEvictionGraceDuration || updateForceDeleteAfterGraceDuration {
+			diffs.NodeEvictionNodePoolSettings = currentNodePool.NodeEvictionNodePoolSettings
+			if diffs.NodeEvictionNodePoolSettings == nil {
+				diffs.NodeEvictionNodePoolSettings = &containerengine.NodeEvictionNodePoolSettings{}
+			}
+			if updateEvictionGraceDuration {
+				diffs.NodeEvictionNodePoolSettings.EvictionGraceDuration = &state.NodePool.EvictionGraceDuration
+			}
+			if updateForceDeleteAfterGraceDuration {
+				diffs.NodeEvictionNodePoolSettings.IsForceDeleteAfterGraceDuration = common.Bool(state.NodePool.ForceDeleteAfterGraceDuration)
+			}
+
+		}
+
+		if updateNodePublicSSHKeyContents {
+			diffs.SshPublicKey = common.String(state.NodePool.NodePublicSSHKeyContents)
+		}
+
+		if updateNodeUserDataContents {
+			diffs.NodeMetadata = currentNodePool.NodeMetadata
+			diffs.NodeMetadata = nil
+			if diffs.NodeMetadata == nil {
+				diffs.NodeMetadata = make(map[string]string)
+			}
+
+			diffs.NodeMetadata["user_data"] = ensureBase64Encode(state.NodePool.NodeUserDataContents)
+		}
+
+		_, err = mgr.containerEngineClient.UpdateNodePool(ctx, diffs)
+		if err != nil {
+			logrus.Debugf("[oraclecontainerengine] OKE node pool reconciliation failed with err %v", err)
+			return err
+		}
+		return nil
+	}
+
+	// TODO consider optionally waiting until request is complete
+	logrus.Debugf("[oraclecontainerengine] no diffs detected for node pool ID %s", nodePoolID)
+	return nil
+}
+
 // GetVcnIDByClusterID returns the VCN ID for the existing cluster with the
 // specified Id, or an error.
 func (mgr *ClusterManagerClient) GetVcnIDByClusterID(ctx context.Context, clusterID string) (string, error) {
@@ -1913,4 +2099,12 @@ func negate(b bool) *bool {
 		return common.Bool(false)
 	}
 	return common.Bool(true)
+}
+
+func ensureBase64Encode(s string) string {
+	_, err := base64.StdEncoding.DecodeString(s)
+	if err == nil {
+		return s
+	}
+	return base64.StdEncoding.EncodeToString([]byte(s))
 }
