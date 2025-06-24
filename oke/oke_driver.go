@@ -123,6 +123,11 @@ type State struct {
 
 	// Should the Deletion of VCN be skipped
 	SkipVCNDelete bool
+
+	// Comma separated list of master encryption key OCID(s)
+	ImageVerificationKmsKeyID string
+	// Choose basic or enhanced cluster
+	ClusterType string
 }
 
 // Elements that make up the Network configuration (and state) for the OKE cluster
@@ -213,32 +218,32 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "could not get container engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not get container engine client")
 	}
 
 	nodePoolIDs, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
 	}
 
 	for _, nodePoolID := range nodePoolIDs {
 		logrus.Infof("[oraclecontainerengine] Deleting node pool %s", nodePoolID)
 		err := oke.DeleteNodePool(ctx, nodePoolID)
 		if err != nil {
-			return errors.Wrap(err, "could not delete node pool")
+			return errors.Wrap(err, "[oraclecontainerengine] could not delete node pool")
 		}
 	}
 
 	// Get the VCN ID before the cluster is DELETED
 	vcnID, err := oke.GetVcnIDByClusterID(ctx, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "could not retrieve virtual cloud network (VCN)")
+		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve virtual cloud network (VCN)")
 	}
 
 	logrus.Info("[oraclecontainerengine] Deleting OKE cluster")
 	err = oke.DeleteCluster(ctx, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "could not delete cluster")
+		return errors.Wrap(err, "[oraclecontainerengine] could not delete cluster")
 	}
 
 	if state.SkipVCNDelete {
@@ -249,7 +254,7 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 	logrus.Info("[oraclecontainerengine] Deleting VCN")
 	err = oke.DeleteVCN(ctx, vcnID)
 	if err != nil {
-		return errors.Wrap(err, "could not delete virtual cloud network (VCN)")
+		return errors.Wrap(err, "[oraclecontainerengine] could not delete virtual cloud network (VCN)")
 	}
 	return nil
 }
@@ -275,6 +280,13 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	driverFlag.Options["user-ocid"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The OCID of a user who has access to the tenancy/compartment",
+	}
+	driverFlag.Options["cluster-type"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The type of the OKE cluster (basic or enhanced)",
+		Default: &types.Default{
+			DefaultString: "BASIC_CLUSTER",
+		},
 	}
 	driverFlag.Options["tenancy-name"] = &types.Flag{
 		Type:  types.StringType,
@@ -312,9 +324,21 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The display name of the OKE cluster (and VCN and node pool if applicable) that should be displayed to the user",
 	}
+	driverFlag.Options["eviction-grace-duration"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Cordon and drain Eviction grace period in minutes",
+	}
+	driverFlag.Options["force-delete-after-grace-duration"] = &types.Flag{
+		Type:  types.BoolType,
+		Usage: "Whether to send a SIGKILL signal if a pod does not terminate within the specified grace period",
+	}
 	driverFlag.Options["kms-key-id"] = &types.Flag{
 		Type:  types.StringType,
 		Usage: "The OCID of the KMS key to be used as the master for Kubernetes secret encryption",
+	}
+	driverFlag.Options["image-verification-kms-key-id"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Comma separated list of OCID of the KMS key to verify the image signatures",
 	}
 	driverFlag.Options["kubernetes-version"] = &types.Flag{
 		Type:  types.StringType,
@@ -331,6 +355,10 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 	driverFlag.Options["flex-ocpus"] = &types.Flag{
 		Type:  types.IntType,
 		Usage: "Optional number of OCPUs for nodes (requires flexible shape) be specified with --node-shape",
+	}
+	driverFlag.Options["flex-memory-in-gbs"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "Optional amount of memory in GB for nodes (requires flexible shape) be specified with --node-shape",
 	}
 	driverFlag.Options["enable-tiller"] = &types.Flag{
 		Type:  types.BoolType,
@@ -513,6 +541,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVcnDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
 	state.KmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kms-key-id", "kmsKeyId").(string)
+	state.ImageVerificationKmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "image-verification-kms-key-id kms-key-id", "imageVerificationKmsKeyID").(string)
+	state.ClusterType = options.GetValueFromDriverOptions(driverOptions, types.StringType, "cluster-type", "clusterType").(string)
 
 	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesVersion").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
@@ -562,6 +592,10 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 
 	if state.Network.VCNName != "" {
 		state.SkipVCNDelete = true
+	}
+
+	if state.ClusterType == "" {
+		state.ClusterType = "BASIC_CLUSTER"
 	}
 
 	if state.Network.NodePoolSubnetName == "" {
@@ -661,6 +695,8 @@ func (s *State) validate() error {
 		return fmt.Errorf(`"flex-ocpus", requires nodes to use a flexible shape with --node-shape"`)
 	} else if s.NodePool.FlexOCPUs != 0 && (s.NodePool.FlexOCPUs > 64) {
 		return fmt.Errorf(`"flex-ocpus", if set, must not be larger than 64"`)
+	} else if len(s.ClusterType) > 0 && (!strings.Contains(strings.ToLower(s.ClusterType), "basic") && !strings.Contains(strings.ToLower(s.ClusterType), "enhanced")) {
+		return fmt.Errorf(`"only enhanced or basic Cluster types are supported"`)
 	}
 
 	return nil
@@ -855,7 +891,7 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 	}
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
 	}
 
 	newState, err := GetStateFromOpts(opts)
@@ -881,8 +917,8 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 		state.KubernetesVersion = newState.KubernetesVersion
 	}
 
-	// Reconcile any other node pool changes besides version and count
-	err = d.ProcessOtherNodePoolUpdates(ctx, info, opts)
+	// reconcile any other node pool changes besides version and count
+	err = d.reconcile(ctx, info, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -900,17 +936,17 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
 	}
 
 	cluster, err := oke.GetClusterByID(ctx, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not retrieve the cluster")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve the cluster")
 	}
 
 	kubeConfig, _, err := oke.GetKubeconfigByClusterID(ctx, state.ClusterID, state.Region)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not retrieve the Oracle Container Engine kubeconfig")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve the Oracle Container Engine kubeconfig")
 	}
 
 	if cluster.Endpoints.Kubernetes != nil && len(*cluster.Endpoints.Kubernetes) > 0 {
@@ -961,7 +997,7 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 			// Alternatively, we could set a more useful error message about the API server not being reachable.
 			return info, nil
 		}
-		return nil, errors.Wrap(err, "could not generate service account token from OKE kubeconfig")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not generate service account token from OKE kubeconfig")
 	}
 
 	return info, nil
@@ -976,22 +1012,22 @@ func (d *OKEDriver) GetClusterSize(ctx context.Context, info *types.ClusterInfo)
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
 	}
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not retrieve node pool id")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
 	}
 
 	if len(nodePoolIds) <= 0 {
-		return nil, fmt.Errorf("could not retrieve node pool id")
+		return nil, fmt.Errorf("[oraclecontainerengine] could not retrieve node pool id")
 	}
 
 	// Assumption of a single node pool here
 	nodePool, err := oke.GetNodePoolByID(ctx, nodePoolIds[0])
 	if err != nil {
-		return nil, errors.Wrap(err, "could not retrieve node pool")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool")
 	}
 
 	nodeCount := &types.NodeCount{Count: int64(len(nodePool.Nodes))}
@@ -1005,7 +1041,7 @@ func (d *OKEDriver) GetClusterSize(ctx context.Context, info *types.ClusterInfo)
 func storeState(info *types.ClusterInfo, state State) error {
 	bytes, err := json.Marshal(state)
 	if err != nil {
-		return errors.Wrap(err, "could not marshal state")
+		return errors.Wrap(err, "[oraclecontainerengine] could not marshal state")
 	}
 
 	if info.Metadata == nil {
@@ -1024,12 +1060,12 @@ func (d *OKEDriver) GetVersion(ctx context.Context, info *types.ClusterInfo) (*t
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] ould not get Oracle Container Engine client")
 	}
 
 	cluster, err := oke.GetClusterByID(ctx, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "could not retrieve the Oracle Container Engine cluster")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve the Oracle Container Engine cluster")
 	}
 
 	version := &types.KubernetesVersion{Version: *cluster.KubernetesVersion}
@@ -1046,13 +1082,13 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "could not get Oracle Container Engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
 	}
 
 	logrus.Infof("[oraclecontainerengine] Updating the number of nodes in the node-pool to %d", count.Count)
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
 	}
 	if len(nodePoolIds) <= 0 {
 		return fmt.Errorf("could not retrieve node pool id")
@@ -1060,7 +1096,7 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 
 	err = oke.ScaleNodePool(ctx, nodePoolIds[0], int(count.Count), state.CompartmentID)
 	if err != nil {
-		return errors.Wrap(err, "could not adjust the number of nodes in the pool")
+		return errors.Wrap(err, "[oraclecontainerengine] could not adjust the number of nodes in the pool")
 	}
 
 	// scale is currently asynchronous
@@ -1078,7 +1114,7 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "could not get Oracle Container Engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
 	}
 	// Does not currently wait
 	mErr := oke.UpdateMasterKubernetesVersion(ctx, state.ClusterID, version.Version)
@@ -1088,7 +1124,7 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
 	}
 
 	var npErr error
@@ -1107,58 +1143,13 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 	}
 
 	if mErr != nil {
-		return errors.Wrap(mErr, "could not update the version of Kubernetes master(s)")
+		return errors.Wrap(mErr, "[oraclecontainerengine] could not update the version of Kubernetes master(s)")
 	} else if npErr != nil {
-		return errors.Wrap(npErr, "could not update the Kubernetes version of one the node pool")
+		return errors.Wrap(npErr, "[oraclecontainerengine] could not update the Kubernetes version of one the node pool")
 	}
 
 	// update version is currently asynchronous
 	logrus.Info("[oraclecontainerengine] Cluster version (masters and node pools) updated successfully")
-	return nil
-}
-
-func (d *OKEDriver) ProcessOtherNodePoolUpdates(ctx context.Context, info *types.ClusterInfo, opts *types.DriverOptions) error {
-	logrus.Debugf("[oraclecontainerengine] ProcessOtherNodePoolUpdates(...) called")
-
-	state, err := GetState(info)
-	if err != nil {
-		return err
-	}
-	oke, err := constructClusterManagerClient(ctx, state)
-	if err != nil {
-		return errors.Wrap(err, "could not get Oracle Container Engine client")
-	}
-
-	newState, err := GetStateFromOpts(opts)
-	if err != nil {
-		return err
-	}
-
-	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
-	if err != nil {
-		return errors.Wrap(err, "could not retrieve node pool id")
-	}
-
-	var npErr error
-	for _, nodePoolID := range nodePoolIds {
-		nodePool, err := oke.GetNodePoolByID(ctx, nodePoolID)
-		if err != nil {
-			logrus.Debugf("[oraclecontainerengine] could not retrieve node pool")
-			continue
-		}
-		logrus.Infof("[oraclecontainerengine] Reconciling other changes for node pool %s", *nodePool.Id)
-		nextNpErr := oke.ReconcileNodePool(ctx, *nodePool.Id, &newState)
-		if nextNpErr != nil {
-			npErr = nextNpErr
-			logrus.Debugf("[oraclecontainerengine] warning: could not reconcile node pool with Rancher state in cluster.management.cattle.io")
-		}
-	}
-
-	if npErr != nil {
-		return errors.Wrap(npErr, "could not reconcile node pool")
-	}
-	// update version is currently asynchronous
-	logrus.Info("[oraclecontainerengine] Node pools updated successfully")
 	return nil
 }
 
@@ -1201,6 +1192,58 @@ func (d *OKEDriver) GetK8SCapabilities(ctx context.Context, options *types.Drive
 func (d *OKEDriver) RemoveLegacyServiceAccount(ctx context.Context, info *types.ClusterInfo) error {
 	logrus.Debugf("[oraclecontainerengine] RemoveLegacyServiceAccount(...) called")
 	// TODO
+	return nil
+}
+
+func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts *types.DriverOptions) error {
+	logrus.Debugf("[oraclecontainerengine] reconcile(...) called")
+
+	state, err := GetState(info)
+	if err != nil {
+		return err
+	}
+	oke, err := constructClusterManagerClient(ctx, state)
+	if err != nil {
+		return errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+	}
+
+	newState, err := GetStateFromOpts(opts)
+	if err != nil {
+		return err
+	}
+
+	clusterErr := oke.ReconcileCluster(ctx, state.ClusterID, &newState)
+	if clusterErr != nil {
+		logrus.Debugf("[oraclecontainerengine] warning: could not reconcile cluster with Rancher state in cluster.management.cattle.io")
+	}
+
+	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
+	if err != nil {
+		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
+	}
+
+	var npErr error
+	for _, nodePoolID := range nodePoolIds {
+		nodePool, err := oke.GetNodePoolByID(ctx, nodePoolID)
+		if err != nil {
+			logrus.Debugf("[oraclecontainerengine] could not retrieve node pool")
+			continue
+		}
+		logrus.Infof("[oraclecontainerengine] Reconciling other changes for node pool %s", *nodePool.Id)
+		nextNpErr := oke.ReconcileNodePool(ctx, *nodePool.Id, &newState)
+		if nextNpErr != nil {
+			npErr = nextNpErr
+			logrus.Debugf("[oraclecontainerengine] warning: could not reconcile node pool with Rancher state in cluster.management.cattle.io")
+		}
+	}
+
+	if npErr != nil {
+		return errors.Wrap(npErr, "[oraclecontainerengine] could not reconcile node pool")
+	} else if clusterErr != nil {
+		return errors.Wrap(npErr, "[oraclecontainerengine] could not reconcile cluster")
+	}
+	// update version is currently asynchronous
+	logrus.Info("[oraclecontainerengine] Node pools updated successfully")
 	return nil
 }
 
