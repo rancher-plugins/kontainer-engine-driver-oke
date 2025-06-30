@@ -128,6 +128,7 @@ type State struct {
 	ImageVerificationKmsKeyID string
 	// Choose basic or enhanced cluster
 	ClusterType string
+	LogLevel    string
 }
 
 // Elements that make up the Network configuration (and state) for the OKE cluster
@@ -174,7 +175,7 @@ type NodeConfiguration struct {
 	NodePublicSSHKeyContents string
 	// The optional user_data file path to execute on worker nodes
 	NodeUserDataPath string
-	// The optional user_data contents to execute on worker nodes
+	// The optional base64-encoded user_data contents to execute on worker nodes
 	NodeUserDataContents string
 	// The number of nodes in each subnet / availability domain
 	QuantityPerSubnet int64
@@ -208,7 +209,7 @@ func NewDriver() types.Driver {
 }
 
 func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
-	logrus.Debugf("[oraclecontainerengine] Remove(...) called")
+	logrus.Tracef("[oraclecontainerengine] Remove(...) called")
 	// Delete the cluster along with its node-pools and VCN (and associated network resource)
 
 	state, err := GetState(info)
@@ -218,16 +219,16 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not get container engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not construct container engine client")
 	}
 
 	nodePoolIDs, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
 	}
 
 	for _, nodePoolID := range nodePoolIDs {
-		logrus.Infof("[oraclecontainerengine] Deleting node pool %s", nodePoolID)
+		logrus.Infof("[oraclecontainerengine] Deleting node pool %s from cluster [%s]", nodePoolID, state.Name)
 		err := oke.DeleteNodePool(ctx, nodePoolID)
 		if err != nil {
 			return errors.Wrap(err, "[oraclecontainerengine] could not delete node pool")
@@ -237,10 +238,10 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 	// Get the VCN ID before the cluster is DELETED
 	vcnID, err := oke.GetVcnIDByClusterID(ctx, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve virtual cloud network (VCN)")
+		return errors.Wrap(err, "[oraclecontainerengine] could not get virtual cloud network (VCN) by id")
 	}
 
-	logrus.Info("[oraclecontainerengine] Deleting OKE cluster")
+	logrus.Info("[oraclecontainerengine] Deleting cluster [%s]", state.Name)
 	err = oke.DeleteCluster(ctx, state.ClusterID)
 	if err != nil {
 		return errors.Wrap(err, "[oraclecontainerengine] could not delete cluster")
@@ -251,8 +252,8 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 	}
 
 	// TODO we could be deleting a preexisting VCN here
-	logrus.Info("[oraclecontainerengine] Deleting VCN")
-	err = oke.DeleteVCN(ctx, vcnID)
+	logrus.Infof("[oraclecontainerengine] Deleting VCN for cluster [%s]", state.Name)
+	err = oke.DeleteVCN(ctx, vcnID, state.ClusterID)
 	if err != nil {
 		return errors.Wrap(err, "[oraclecontainerengine] could not delete virtual cloud network (VCN)")
 	}
@@ -260,15 +261,33 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 }
 
 func GetState(info *types.ClusterInfo) (State, error) {
-	logrus.Debugf("[oraclecontainerengine] GetState(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetState(...) called")
 	state := State{}
 	err := json.Unmarshal([]byte(info.Metadata["state"]), &state)
+	if err != nil {
+		if strings.Contains(strings.ToLower(state.LogLevel), "debug") {
+			logrus.Infof("[oraclecontainerengine] Setting log level to Debug")
+			logrus.SetLevel(logrus.DebugLevel)
+		} else if strings.Contains(strings.ToLower(state.LogLevel), "warn") {
+			logrus.Infof("[oraclecontainerengine] Setting log level to Warn")
+			logrus.SetLevel(logrus.WarnLevel)
+		} else if strings.Contains(strings.ToLower(state.LogLevel), "error") {
+			logrus.Infof("[oraclecontainerengine] Setting log level to Error")
+			logrus.SetLevel(logrus.ErrorLevel)
+		} else if strings.Contains(strings.ToLower(state.LogLevel), "trace") {
+			logrus.Infof("[oraclecontainerengine] Setting log level to Trace")
+			logrus.SetLevel(logrus.TraceLevel)
+		} else {
+			logrus.Infof("[oraclecontainerengine] Setting log level to Info")
+			logrus.SetLevel(logrus.InfoLevel)
+		}
+	}
 	return state, err
 }
 
 // GetDriverCreateOptions implements driver interface
 func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFlags, error) {
-	logrus.Debugf("[oraclecontainerengine] GetDriverCreateOptions(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetDriverCreateOptions(...) called")
 
 	driverFlag := types.DriverFlags{
 		Options: make(map[string]*types.Flag),
@@ -506,7 +525,7 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 
 // GetDriverUpdateOptions implements driver interface
 func (d *OKEDriver) GetDriverUpdateOptions(ctx context.Context) (*types.DriverFlags, error) {
-	logrus.Debugf("[oraclecontainerengine] GetDriverUpdateOptions(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetDriverUpdateOptions(...) called")
 
 	driverFlag := types.DriverFlags{
 		Options: make(map[string]*types.Flag),
@@ -519,12 +538,40 @@ func (d *OKEDriver) GetDriverUpdateOptions(ctx context.Context) (*types.DriverFl
 		Type:  types.StringType,
 		Usage: "The updated Kubernetes version",
 	}
+	driverFlag.Options["eviction-grace-duration"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The updated cordon and drain Eviction grace period in minutes",
+	}
+	driverFlag.Options["force-delete-after-grace-duration"] = &types.Flag{
+		Type:  types.BoolType,
+		Usage: "The updated value to send a SIGKILL signal if a pod does not terminate within the specified grace period",
+	}
+	driverFlag.Options["flex-ocpus"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "The updated number of OCPUs for nodes (requires flexible shape)",
+	}
+	driverFlag.Options["flex-memory-in-gbs"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "The updated amount of memory in GB for nodes (requires flexible shape)",
+	}
+	driverFlag.Options["custom-boot-volume-size"] = &types.Flag{
+		Type:  types.IntType,
+		Usage: "The updated custom boot volume size for the nodes",
+	}
+	driverFlag.Options["node-image"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The updated OS for the node image",
+	}
+	driverFlag.Options["node-shape"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The updated shape of the node (determines number of CPUs and  amount of memory on each node)",
+	}
 	return &driverFlag, nil
 }
 
 // SetDriverOptions implements driver interface
 func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
-	logrus.Debugf("[oraclecontainerengine] GetStateFromOpts(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetStateFromOpts(...) called")
 
 	// Capture the requested options for the cluster
 	state := State{
@@ -541,8 +588,9 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVcnDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
 	state.KmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kms-key-id", "kmsKeyId").(string)
-	state.ImageVerificationKmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "image-verification-kms-key-id kms-key-id", "imageVerificationKmsKeyID").(string)
+	state.ImageVerificationKmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "image-verification-kms-key-id", "imageVerificationKmsKeyID").(string)
 	state.ClusterType = options.GetValueFromDriverOptions(driverOptions, types.StringType, "cluster-type", "clusterType").(string)
+	state.LogLevel = options.GetValueFromDriverOptions(driverOptions, types.StringType, "log-level", "logLevel").(string)
 
 	state.KubernetesVersion = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kubernetes-version", "kubernetesVersion").(string)
 	state.Name = options.GetValueFromDriverOptions(driverOptions, types.StringType, "name").(string)
@@ -596,6 +644,9 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 
 	if state.ClusterType == "" {
 		state.ClusterType = "BASIC_CLUSTER"
+	}
+	if state.LogLevel == "" {
+		state.LogLevel = "info"
 	}
 
 	if state.Network.NodePoolSubnetName == "" {
@@ -670,7 +721,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 }
 
 func (s *State) validate() error {
-	logrus.Debugf("[oraclecontainerengine] validate(...) called")
+	logrus.Tracef("[oraclecontainerengine] validate(...) called")
 	if s.PrivateKeyPath == "" && s.PrivateKeyContents == "" {
 		return fmt.Errorf(`"private-key-path or private-key-contents" are required`)
 	} else if s.TenancyID == "" {
@@ -704,7 +755,7 @@ func (s *State) validate() error {
 
 // Create implements driver interface
 func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *types.ClusterInfo) (*types.ClusterInfo, error) {
-	logrus.Debugf("[oraclecontainerengine] Create(...) called")
+	logrus.Tracef("[oraclecontainerengine] Create(...) called")
 
 	state, err := GetStateFromOpts(opts)
 	if err != nil {
@@ -717,7 +768,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 	clusterInfo := &types.ClusterInfo{}
 	err = storeState(clusterInfo, state)
 	if err != nil {
-		logrus.Debugf("[oraclecontainerengine] error storing state %v", err)
+		logrus.Errorf("[oraclecontainerengine] error storing state %v", err)
 		return clusterInfo, err
 	}
 
@@ -747,26 +798,26 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		// we want to perform a manual recreate
 		vcnAlreadyCreated, err := oke.GetVcnByName(ctx, state.CompartmentID, state.Network.VCNName)
 		if err == nil && len(vcnAlreadyCreated.String()) > 0 {
-			logrus.Debugf("[oraclecontainerengine] Info: recreating vcn %v in compartment %s", state.Network.VCNName, state.CompartmentID)
+			logrus.Infof("[oraclecontainerengine] recreating vcn %v in compartment %s", state.Network.VCNName, state.CompartmentID)
 			// a previous attempt failed, so let's delete this one and create a new one below
-			oke.DeleteVCN(ctx, *vcnAlreadyCreated.Id)
+			oke.DeleteVCN(ctx, *vcnAlreadyCreated.Id, state.ClusterID)
 		}
 
-		logrus.Infof("[oraclecontainerengine] Creating a new VCN and required network resources for OKE cluster %s", state.Name)
+		logrus.Infof("[oraclecontainerengine] Creating new VCN and required network resources for cluster [%s]", state.Name)
 		vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds, err = oke.CreateVCNAndNetworkResources(&state)
 
 		if err != nil {
-			logrus.Debugf("[oraclecontainerengine] error creating the VCN and/or the required network resources %v", err)
+			logrus.Errorf("[oraclecontainerengine] error creating the VCN and/or the required network resources %v", err)
 			return clusterInfo, err
 		}
 
 	} else {
 		// Use an existing VCN and subnets. Besides the VCN and subnets, we are
 		// assuming that the internet gateway, route table, security lists are present and configured correctly.
-		logrus.Debugf("[oraclecontainerengine] using an existing VCN %s", state.Network.VCNName)
+		logrus.Infof("[oraclecontainerengine] using an existing VCN %s", state.Network.VCNName)
 		vcnID, err = oke.GetVcnIDByName(ctx, state.Network.VcnCompartmentID, state.Network.VCNName)
 		if err != nil {
-			logrus.Debugf("[oraclecontainerengine] error looking up the Id of existing VCN %s %v", state.Network.VCNName, err)
+			logrus.Errorf("[oraclecontainerengine] error looking up the Id of existing VCN %s %v", state.Network.VCNName, err)
 			return clusterInfo, err
 		}
 
@@ -774,12 +825,12 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		controlPlaneSubnetID, err = oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ControlPlaneSubnetName)
 		if err != nil {
 			// For backwards compatibility, we can create a cluster without specifying the control-plane subnet.
-			logrus.Infof("[oraclecontainerengine] warning: unable to look up the Id the Kubernetes control-plane subnet %s %v", state.Network.ControlPlaneSubnetName, err)
+			logrus.Warnf("[oraclecontainerengine] unable to look up the Id the Kubernetes control-plane subnet %s %v", state.Network.ControlPlaneSubnetName, err)
 		}
 
 		serviceSubnet1Id, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ServiceLBSubnet1Name)
 		if err != nil {
-			logrus.Debugf("[oraclecontainerengine] error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet1Name, err)
+			logrus.Errorf("[oraclecontainerengine] error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet1Name, err)
 			return clusterInfo, err
 		}
 		serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet1Id)
@@ -787,7 +838,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		if state.Network.ServiceLBSubnet2Name != "" {
 			serviceSubnet2Id, err := oke.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.ServiceLBSubnet2Name)
 			if err != nil {
-				logrus.Debugf("[oraclecontainerengine] error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet2Name, err)
+				logrus.Errorf("[oraclecontainerengine] error looking up the Id of a Kubernetes service Subnet %s %v", state.Network.ServiceLBSubnet2Name, err)
 				return clusterInfo, err
 			}
 			serviceSubnetIDs = append(serviceSubnetIDs, serviceSubnet2Id)
@@ -797,7 +848,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		if err != nil {
 			// If a custom node pool subnet net was explicitly passed in, error out if it is not found.
 			if state.Network.NodePoolSubnetName != nodeSubnetName {
-				logrus.Debugf("[oraclecontainerengine] error looking up the Id of a Kubernetes node Subnet %s %v", state.Network.NodePoolSubnetName, err)
+				logrus.Errorf("[oraclecontainerengine] error looking up the Id of a Kubernetes node Subnet %s %v", state.Network.NodePoolSubnetName, err)
 				return clusterInfo, err
 			}
 			// Node pool subnet name was not passed in, attempt to deduce it
@@ -824,7 +875,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		if len(controlPlaneSubnetID) > 0 {
 			controlPlaneSubnet, err := oke.GetSubnetById(ctx, controlPlaneSubnetID)
 			if err != nil {
-				logrus.Debugf("[oraclecontainerengine] error fetching Kubernetes control-plane subnet subnet %v", err)
+				logrus.Errorf("[oraclecontainerengine] error fetching Kubernetes control-plane subnet subnet %v", err)
 				return clusterInfo, err
 			}
 			if *controlPlaneSubnet.ProhibitPublicIpOnVnic != state.PrivateControlPlane {
@@ -834,7 +885,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		for _, nextNodeSubnetId := range nodeSubnetIds {
 			nextNodeSubnet, err := oke.GetSubnetById(ctx, nextNodeSubnetId)
 			if err != nil {
-				logrus.Debugf("[oraclecontainerengine] error fetching node subnet %v", err)
+				logrus.Errorf("[oraclecontainerengine] error fetching node subnet %v", err)
 				return clusterInfo, err
 			}
 			if *nextNodeSubnet.ProhibitPublicIpOnVnic != state.PrivateNodes {
@@ -847,34 +898,44 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 
 	clusterID, err := oke.GetClusterByName(ctx, state.CompartmentID, state.Name)
 	if err == nil && len(clusterID) > 0 {
-		logrus.Debugf("[oraclecontainerengine] warning: an existing cluster with name %s already exists in compartment %s", state.Name, state.CompartmentID)
-		logrus.Debugf("[oraclecontainerengine] removing cluster %s  as part of recreate attempt", state.ClusterID)
-		oke.DeleteCluster(ctx, clusterID)
+		logrus.Warnf("[oraclecontainerengine] an existing cluster [%s] already exists in compartment %s", state.Name, state.CompartmentID)
+		logrus.Infof("[oraclecontainerengine] removing cluster [%s] as part of recreate attempt", state.ClusterID)
+		err := oke.DeleteCluster(ctx, clusterID)
+		if err != nil {
+			logrus.Warnf("[oraclecontainerengine] error creating OKE cluster [%s] %v", state.Name, err)
+		}
 	}
 
-	logrus.Infof("[oraclecontainerengine] Creating OKE cluster %s", state.Name)
+	logrus.Infof("[oraclecontainerengine] Creating cluster [%s]", state.Name)
 	err = oke.CreateCluster(ctx, &state, vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
-		logrus.Debugf("[oraclecontainerengine] error creating the OKE cluster %v", err)
+		logrus.Errorf("[oraclecontainerengine] error creating the OKE cluster %v", err)
 
 		return clusterInfo, err
 	}
 	err = storeState(clusterInfo, state)
 	if err != nil {
-		logrus.Debugf("[oraclecontainerengine] error storing state %v", err)
+		logrus.Errorf("[oraclecontainerengine] error storing state %v", err)
 		return clusterInfo, err
 	}
 
-	logrus.Infof("[oraclecontainerengine] Creating node pool for cluster %s", state.Name)
+	logrus.Infof("[oraclecontainerengine] Creating node pool for cluster [%s]", state.Name)
 	err = oke.CreateNodePool(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
-		logrus.Debugf("[oraclecontainerengine] error creating the node pool %v", err)
+		logrus.Errorf("[oraclecontainerengine] error creating the node pool for cluster [%s] %v", state.Name, err)
 		return clusterInfo, err
+	}
+
+	cluster, err := oke.GetClusterByID(ctx, state.ClusterID)
+	if err == nil {
+		if state.Name == "" && cluster.Name != nil {
+			state.Name = *cluster.Name
+		}
 	}
 
 	err = storeState(clusterInfo, state)
 	if err != nil {
-		logrus.Debugf("[oraclecontainerengine] error storing state %v", err)
+		logrus.Errorf("[oraclecontainerengine] error storing state %v", err)
 		return clusterInfo, err
 	}
 
@@ -883,7 +944,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 
 // Update implements driver interface
 func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *types.DriverOptions) (*types.ClusterInfo, error) {
-	logrus.Debugf("[oraclecontainerengine] Update(...) called")
+	logrus.Tracef("[oraclecontainerengine] Update(...) called")
 
 	state, err := GetState(info)
 	if err != nil {
@@ -891,7 +952,7 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 	}
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 
 	newState, err := GetStateFromOpts(opts)
@@ -901,17 +962,18 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 
 	if limitN(int(newState.NodePool.QuantityPerSubnet), int(newState.NodePool.LimitNodeCount)) !=
 		limitN(int(state.NodePool.QuantityPerSubnet), int(state.NodePool.LimitNodeCount)) {
-		logrus.Infof("[oraclecontainerengine] Updating quantity of nodes in the node-pool to %d", limitN(int(newState.NodePool.QuantityPerSubnet*int64(oke.numADs(ctx, state.CompartmentID))), int(newState.NodePool.LimitNodeCount)))
+		logrus.Infof("[oraclecontainerengine] Updating quantity of nodes for [%s] in the node-pool to %d", state.Name, limitN(int(newState.NodePool.QuantityPerSubnet*int64(oke.numADs(ctx, state.CompartmentID))), int(newState.NodePool.LimitNodeCount)))
 		err = d.SetClusterSize(ctx, info, &types.NodeCount{Count: int64(limitN(int(newState.NodePool.QuantityPerSubnet*int64(oke.numADs(ctx, state.CompartmentID))), int(newState.NodePool.LimitNodeCount)))})
 		if err != nil {
+			logrus.Errorf("[oraclecontainerengine] error setting cluster size on cluster [%s]", state.Name)
 			return nil, err
 		}
 		state.NodePool.QuantityPerSubnet = newState.NodePool.QuantityPerSubnet
 	}
 	if newState.KubernetesVersion != state.KubernetesVersion {
-		logrus.Infof("[oraclecontainerengine] Updating Kubernetes version to %s", newState.KubernetesVersion)
 		err = d.SetVersion(ctx, info, &types.KubernetesVersion{Version: string(newState.KubernetesVersion)})
 		if err != nil {
+			logrus.Errorf("[oraclecontainerengine] error updating cluster version to %s on cluster [%s]", newState.KubernetesVersion, state.Name)
 			return nil, err
 		}
 		state.KubernetesVersion = newState.KubernetesVersion
@@ -928,7 +990,7 @@ func (d *OKEDriver) Update(ctx context.Context, info *types.ClusterInfo, opts *t
 }
 
 func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*types.ClusterInfo, error) {
-	logrus.Debugf("[oraclecontainerengine] PostCheck(...) called")
+	logrus.Tracef("[oraclecontainerengine] PostCheck(...) called")
 	state, err := GetState(info)
 	if err != nil {
 		return nil, err
@@ -936,24 +998,24 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 
 	cluster, err := oke.GetClusterByID(ctx, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve the cluster")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get the cluster by id")
 	}
 
 	kubeConfig, _, err := oke.GetKubeconfigByClusterID(ctx, state.ClusterID, state.Region)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve the Oracle Container Engine kubeconfig")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get the OKE kubeconfig by id")
 	}
 
 	if cluster.Endpoints.Kubernetes != nil && len(*cluster.Endpoints.Kubernetes) > 0 {
 		info.Endpoint = *cluster.Endpoints.Kubernetes
 	} else {
 		if state.PrivateControlPlane {
-			logrus.Info("[oraclecontainerengine] warning: access to the Kubernetes API endpoint is limited to the VCN, a bastion host, or authorized SaaS services")
+			logrus.Warnf("[oraclecontainerengine] access to the Kubernetes API endpoint is limited to the VCN, a bastion host, or authorized SaaS services")
 			info.Endpoint = *cluster.Endpoints.PrivateEndpoint
 		} else {
 			info.Endpoint = *cluster.Endpoints.PublicEndpoint
@@ -1004,30 +1066,31 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 }
 
 func (d *OKEDriver) GetClusterSize(ctx context.Context, info *types.ClusterInfo) (*types.NodeCount, error) {
-	logrus.Debugf("[oraclecontainerengine] GetClusterSize(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetClusterSize(...) called")
 	state, err := GetState(info)
 	if err != nil {
+		logrus.Error("[oraclecontainerengine] error getting cluster size")
 		return nil, err
 	}
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
 	}
 
 	if len(nodePoolIds) <= 0 {
-		return nil, fmt.Errorf("[oraclecontainerengine] could not retrieve node pool id")
+		return nil, fmt.Errorf("[oraclecontainerengine] could not find node pool")
 	}
 
 	// Assumption of a single node pool here
 	nodePool, err := oke.GetNodePoolByID(ctx, nodePoolIds[0])
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get node pool by id")
 	}
 
 	nodeCount := &types.NodeCount{Count: int64(len(nodePool.Nodes))}
@@ -1039,6 +1102,7 @@ func (d *OKEDriver) GetClusterSize(ctx context.Context, info *types.ClusterInfo)
 * Marshal the Oracle Container Engine configuration state and store it in the types.ClusterInfo
  */
 func storeState(info *types.ClusterInfo, state State) error {
+	logrus.Tracef("[oraclecontainerengine] storeState(...) called")
 	bytes, err := json.Marshal(state)
 	if err != nil {
 		return errors.Wrap(err, "[oraclecontainerengine] could not marshal state")
@@ -1052,7 +1116,7 @@ func storeState(info *types.ClusterInfo, state State) error {
 }
 
 func (d *OKEDriver) GetVersion(ctx context.Context, info *types.ClusterInfo) (*types.KubernetesVersion, error) {
-	logrus.Debugf("[oraclecontainerengine] GetVersion(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetVersion(...) called")
 	state, err := GetState(info)
 	if err != nil {
 		return nil, err
@@ -1060,12 +1124,12 @@ func (d *OKEDriver) GetVersion(ctx context.Context, info *types.ClusterInfo) (*t
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] ould not get Oracle Container Engine client")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 
 	cluster, err := oke.GetClusterByID(ctx, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not retrieve the Oracle Container Engine cluster")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get the OKE cluster by id")
 	}
 
 	version := &types.KubernetesVersion{Version: *cluster.KubernetesVersion}
@@ -1074,7 +1138,7 @@ func (d *OKEDriver) GetVersion(ctx context.Context, info *types.ClusterInfo) (*t
 }
 
 func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo, count *types.NodeCount) error {
-	logrus.Debugf("[oraclecontainerengine] SetClusterSize(...) called")
+	logrus.Tracef("[oraclecontainerengine] SetClusterSize(...) called")
 	state, err := GetState(info)
 	if err != nil {
 		return err
@@ -1082,16 +1146,16 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 
-	logrus.Infof("[oraclecontainerengine] Updating the number of nodes in the node-pool to %d", count.Count)
+	logrus.Infof("[oraclecontainerengine] Updating the number of nodes for cluster [%s] in the node-pool to %d", state.Name, count.Count)
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
 	}
 	if len(nodePoolIds) <= 0 {
-		return fmt.Errorf("could not retrieve node pool id")
+		return fmt.Errorf("could not get node pool id")
 	}
 
 	err = oke.ScaleNodePool(ctx, nodePoolIds[0], int(count.Count), state.CompartmentID)
@@ -1099,13 +1163,12 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 		return errors.Wrap(err, "[oraclecontainerengine] could not adjust the number of nodes in the pool")
 	}
 
-	// scale is currently asynchronous
-	logrus.Info("[oraclecontainerengine] Cluster size updated successfully")
+	logrus.Infof("[oraclecontainerengine] Cluster size of cluster [%s] updated successfully", state.Name)
 	return nil
 }
 
 func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, version *types.KubernetesVersion) error {
-	logrus.Debugf("[oraclecontainerengine] SetVersion(...) called")
+	logrus.Tracef("[oraclecontainerengine] SetVersion(...) called")
 
 	state, err := GetState(info)
 	if err != nil {
@@ -1114,31 +1177,32 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 	// Does not currently wait
+	logrus.Infof("[oraclecontainerengine] Updating the version of cluster [%s] to %s", state.Name, version.Version)
 	mErr := oke.UpdateMasterKubernetesVersion(ctx, state.ClusterID, version.Version)
 	if mErr != nil {
-		logrus.Debugf("[oraclecontainerengine] warning: could not update the version of Kubernetes master(s)")
+		logrus.Warnf("[oraclecontainerengine] could not update the version of Kubernetes master(s)")
 	}
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
 	}
 
 	var npErr error
 	for _, nodePoolID := range nodePoolIds {
 		nodePool, err := oke.GetNodePoolByID(ctx, nodePoolID)
 		if err != nil {
-			logrus.Debugf("[oraclecontainerengine] could not retrieve node pool")
+			logrus.Warnf("[oraclecontainerengine] could not get node pool %s for cluster [%s] by id", nodePoolID, state.ClusterID)
 			continue
 		}
-		logrus.Infof("[oraclecontainerengine] Updating the version of Kubernetes to %s", version.Version)
+		logrus.Infof("[oraclecontainerengine] Updating the version of node pools of cluster [%s] to %s", state.Name, version.Version)
 		nextNpErr := oke.UpdateNodepoolKubernetesVersion(ctx, *nodePool.Id, version.Version)
 		if nextNpErr != nil {
 			npErr = nextNpErr
-			logrus.Debugf("[oraclecontainerengine] warning: could not update the version of Kubernetes master(s)")
+			logrus.Warnf("[oraclecontainerengine] could not update the version of Kubernetes master(s)")
 		}
 	}
 
@@ -1148,33 +1212,35 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 		return errors.Wrap(npErr, "[oraclecontainerengine] could not update the Kubernetes version of one the node pool")
 	}
 
-	// update version is currently asynchronous
 	logrus.Info("[oraclecontainerengine] Cluster version (masters and node pools) updated successfully")
 	return nil
 }
 
 func (d *OKEDriver) GetCapabilities(ctx context.Context) (*types.Capabilities, error) {
-	logrus.Debugf("[oraclecontainerengine] GetCapabilities(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetCapabilities(...) called")
 	return &d.driverCapabilities, nil
 }
 
 func (d *OKEDriver) ETCDSave(ctx context.Context, clusterInfo *types.ClusterInfo, opts *types.DriverOptions, snapshotName string) error {
-	logrus.Debugf("[oraclecontainerengine] ETCDSave(...) called")
+	logrus.Tracef("[oraclecontainerengine] ETCDSave(...) called")
+	logrus.Warnf("[oraclecontainerengine] ETCD backup operations are not implemented")
 	return fmt.Errorf("ETCD backup operations are not implemented")
 }
 
 func (d *OKEDriver) ETCDRestore(ctx context.Context, clusterInfo *types.ClusterInfo, opts *types.DriverOptions, snapshotName string) (*types.ClusterInfo, error) {
-	logrus.Debugf("[oraclecontainerengine] ETCDRestore(...) called")
+	logrus.Tracef("[oraclecontainerengine] ETCDRestore(...) called")
+	logrus.Warnf("[oraclecontainerengine] ETCD backup operations are not implemented")
 	return nil, fmt.Errorf("ETCD backup operations are not implemented")
 }
 
 func (d *OKEDriver) ETCDRemoveSnapshot(ctx context.Context, clusterInfo *types.ClusterInfo, opts *types.DriverOptions, snapshotName string) error {
-	logrus.Debugf("[oraclecontainerengine] ETCDRemoveSnapshot(...) called")
+	logrus.Tracef("[oraclecontainerengine] ETCDRemoveSnapshot(...) called")
+	logrus.Warnf("[oraclecontainerengine] ETCD backup operations are not implemented")
 	return fmt.Errorf("ETCD backup operations are not implemented")
 }
 
 func (d *OKEDriver) GetK8SCapabilities(ctx context.Context, options *types.DriverOptions) (*types.K8SCapabilities, error) {
-	logrus.Debugf("[oraclecontainerengine] GetK8SCapabilities(...) called")
+	logrus.Tracef("[oraclecontainerengine] GetK8SCapabilities(...) called")
 
 	// TODO OCI supports persistent volumes as well
 	capabilities := &types.K8SCapabilities{
@@ -1190,13 +1256,13 @@ func (d *OKEDriver) GetK8SCapabilities(ctx context.Context, options *types.Drive
 }
 
 func (d *OKEDriver) RemoveLegacyServiceAccount(ctx context.Context, info *types.ClusterInfo) error {
-	logrus.Debugf("[oraclecontainerengine] RemoveLegacyServiceAccount(...) called")
+	logrus.Tracef("[oraclecontainerengine] RemoveLegacyServiceAccount(...) called")
 	// TODO
 	return nil
 }
 
 func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts *types.DriverOptions) error {
-	logrus.Debugf("[oraclecontainerengine] reconcile(...) called")
+	logrus.Tracef("[oraclecontainerengine] reconcile(...) called")
 
 	state, err := GetState(info)
 	if err != nil {
@@ -1204,7 +1270,7 @@ func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts
 	}
 	oke, err := constructClusterManagerClient(ctx, state)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not get Oracle Container Engine client")
+		return errors.Wrap(err, "[oraclecontainerengine] could not construct OKE client")
 	}
 
 	newState, err := GetStateFromOpts(opts)
@@ -1212,28 +1278,31 @@ func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts
 		return err
 	}
 
+	logrus.Infof("[oraclecontainerengine] Reconciling other changes for cluster [%s]", state.Name)
 	clusterErr := oke.ReconcileCluster(ctx, state.ClusterID, &newState)
 	if clusterErr != nil {
-		logrus.Debugf("[oraclecontainerengine] warning: could not reconcile cluster with Rancher state in cluster.management.cattle.io")
+		logrus.Warnf("[oraclecontainerengine] could not reconcile cluster with state in cluster.management.cattle.io")
+	} else {
+		logrus.Info("[oraclecontainerengine] cluster update initiated successfully")
 	}
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not retrieve node pool id")
+		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
 	}
 
 	var npErr error
 	for _, nodePoolID := range nodePoolIds {
 		nodePool, err := oke.GetNodePoolByID(ctx, nodePoolID)
 		if err != nil {
-			logrus.Debugf("[oraclecontainerengine] could not retrieve node pool")
+			logrus.Warnf("[oraclecontainerengine] could not get node pool %s for cluster [%s] by id", nodePoolID, state.ClusterID)
 			continue
 		}
-		logrus.Infof("[oraclecontainerengine] Reconciling other changes for node pool %s", *nodePool.Id)
+		logrus.Infof("[oraclecontainerengine] Reconciling other changes for cluster [%s] node pool %s", state.Name, *nodePool.Id)
 		nextNpErr := oke.ReconcileNodePool(ctx, *nodePool.Id, &newState)
 		if nextNpErr != nil {
 			npErr = nextNpErr
-			logrus.Debugf("[oraclecontainerengine] warning: could not reconcile node pool with Rancher state in cluster.management.cattle.io")
+			logrus.Warnf("[oraclecontainerengine] could not reconcile node pool with Rancher state in cluster.management.cattle.io")
 		}
 	}
 
@@ -1242,14 +1311,15 @@ func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts
 	} else if clusterErr != nil {
 		return errors.Wrap(npErr, "[oraclecontainerengine] could not reconcile cluster")
 	}
-	// update version is currently asynchronous
-	logrus.Info("[oraclecontainerengine] Node pools updated successfully")
+
+	logrus.Info("[oraclecontainerengine] Node pool update initiated successfully")
 	return nil
 }
 
 // constructClusterManagerClient is a helper function that constructs a new
 // NewClusterManagerClient based on the state.
 func constructClusterManagerClient(ctx context.Context, state State) (ClusterManagerClient, error) {
+	logrus.Tracef("[oraclecontainerengine] constructClusterManagerClient(...) called")
 	configurationProvider := common.NewRawConfigurationProvider(
 		state.TenancyID,
 		state.UserOCID,
@@ -1269,11 +1339,12 @@ func constructClusterManagerClient(ctx context.Context, state State) (ClusterMan
 // remove is a helper function that removes an element at the specified index
 // from a string array.
 func remove(slice []string, s int) []string {
+	logrus.Tracef("[oraclecontainerengine] remove(...) called")
 	return append(slice[:s], slice[s+1:]...)
 }
 
 func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error) {
-
+	logrus.Tracef("[oraclecontainerengine] getClientsetFromKubeconfig(...) called")
 	cfg, err := clientcmd.RESTConfigFromKubeConfig(kubeconfig)
 	if err != nil {
 		return nil, fmt.Errorf("error building Kubernetes rest config: %s", err.Error())
@@ -1288,7 +1359,7 @@ func getClientsetFromKubeconfig(kubeconfig []byte) (*kubernetes.Clientset, error
 
 // GenerateServiceAccountToken generate a serviceAccountToken for clusterAdmin given a clientset
 func generateServiceAccountToken(clientset kubernetes.Interface) (string, error) {
-
+	logrus.Tracef("[oraclecontainerengine] generateServiceAccountToken(...) called")
 	token := ""
 	namespace := "default"
 	name := "kontainer-engine"
@@ -1382,6 +1453,7 @@ func generateServiceAccountToken(clientset kubernetes.Interface) (string, error)
 }
 
 func isBase64Encoded(data []byte) bool {
+	logrus.Tracef("[oraclecontainerengine] isBase64Encoded(...) called")
 	_, err := base64.StdEncoding.DecodeString(string(data))
 	return err == nil
 }
