@@ -228,10 +228,10 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 	}
 
 	for _, nodePoolID := range nodePoolIDs {
-		logrus.Infof("[oraclecontainerengine] Deleting node pool %s from cluster [%s]", nodePoolID, state.Name)
+		logrus.Infof("[oraclecontainerengine] Deleting node pool(s) from cluster [%s]", state.Name)
 		err := oke.DeleteNodePool(ctx, nodePoolID)
 		if err != nil {
-			return errors.Wrap(err, "[oraclecontainerengine] could not delete node pool")
+			return errors.Wrap(err, "[oraclecontainerengine] could not delete node pool(s)")
 		}
 	}
 
@@ -698,6 +698,10 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 			state.NodePool.NodePublicSSHKeyContents = string(publicKeyBytes)
 		}
 	}
+	if state.NodePool.FlexMemoryInGBs == 0 && state.NodePool.FlexOCPUs != 0 {
+		// Default flex memory in GB to 16 * the number of OCPUs if unset
+		state.NodePool.FlexMemoryInGBs = state.NodePool.FlexOCPUs * 16
+	}
 
 	if state.NodePool.NodeUserDataContents != "" {
 		userDataBytes := []byte(state.NodePool.NodeUserDataContents)
@@ -906,7 +910,7 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		}
 	}
 
-	logrus.Infof("[oraclecontainerengine] Creating cluster [%s]", state.Name)
+	logrus.Infof("[oraclecontainerengine] Creating Kubernetes Engine (OKE) cluster [%s] version %s", state.Name, state.KubernetesVersion)
 	err = oke.CreateCluster(ctx, &state, vcnID, controlPlaneSubnetID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
 		logrus.Errorf("[oraclecontainerengine] error creating the OKE cluster %v", err)
@@ -919,10 +923,10 @@ func (d *OKEDriver) Create(ctx context.Context, opts *types.DriverOptions, _ *ty
 		return clusterInfo, err
 	}
 
-	logrus.Infof("[oraclecontainerengine] Creating node pool for cluster [%s]", state.Name)
-	err = oke.CreateNodePool(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
+	logrus.Infof("[oraclecontainerengine] Creating node pool(s) for cluster [%s]", state.Name)
+	err = oke.CreateNodePools(ctx, &state, vcnID, serviceSubnetIDs, nodeSubnetIds)
 	if err != nil {
-		logrus.Errorf("[oraclecontainerengine] error creating the node pool for cluster [%s] %v", state.Name, err)
+		logrus.Errorf("[oraclecontainerengine] error creating the node pool(s) for cluster [%s] %v", state.Name, err)
 		return clusterInfo, err
 	}
 
@@ -1080,20 +1084,24 @@ func (d *OKEDriver) GetClusterSize(ctx context.Context, info *types.ClusterInfo)
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not list node pool(s) ids")
 	}
 
 	if len(nodePoolIds) <= 0 {
-		return nil, fmt.Errorf("[oraclecontainerengine] could not find node pool")
+		return nil, fmt.Errorf("[oraclecontainerengine] could not find node pool(s)")
 	}
 
-	// Assumption of a single node pool here
-	nodePool, err := oke.GetNodePoolByID(ctx, nodePoolIds[0])
-	if err != nil {
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not get node pool by id")
+	nodes := 0
+	for _, nodePoolID := range nodePoolIds {
+		// Assumption of a single node pool here
+		nodePool, err := oke.GetNodePoolByID(ctx, nodePoolID)
+		if err != nil {
+			return nil, errors.Wrap(err, "[oraclecontainerengine] could not get node pool(s) by id")
+		}
+		nodes += len(nodePool.Nodes)
 	}
 
-	nodeCount := &types.NodeCount{Count: int64(len(nodePool.Nodes))}
+	nodeCount := &types.NodeCount{Count: int64(nodes)}
 
 	return nodeCount, nil
 }
@@ -1155,12 +1163,14 @@ func (d *OKEDriver) SetClusterSize(ctx context.Context, info *types.ClusterInfo,
 		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
 	}
 	if len(nodePoolIds) <= 0 {
-		return fmt.Errorf("could not get node pool id")
+		return fmt.Errorf("could not get node pool(s) id")
 	}
 
-	err = oke.ScaleNodePool(ctx, nodePoolIds[0], int(count.Count), state.CompartmentID)
-	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not adjust the number of nodes in the pool")
+	for _, nodePoolID := range nodePoolIds {
+		err = oke.ScaleNodePool(ctx, nodePoolID, int(count.Count), state.CompartmentID)
+		if err != nil {
+			return errors.Wrap(err, "[oraclecontainerengine] could not adjust the number of nodes in the pool")
+		}
 	}
 
 	logrus.Infof("[oraclecontainerengine] Cluster size of cluster [%s] updated successfully", state.Name)
@@ -1188,7 +1198,7 @@ func (d *OKEDriver) SetVersion(ctx context.Context, info *types.ClusterInfo, ver
 
 	nodePoolIds, err := oke.ListNodepoolIdsInCluster(ctx, state.CompartmentID, state.ClusterID)
 	if err != nil {
-		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool ids")
+		return errors.Wrap(err, "[oraclecontainerengine] could not list node pool(s) ids")
 	}
 
 	var npErr error
@@ -1302,7 +1312,7 @@ func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts
 		nextNpErr := oke.ReconcileNodePool(ctx, *nodePool.Id, &newState)
 		if nextNpErr != nil {
 			npErr = nextNpErr
-			logrus.Warnf("[oraclecontainerengine] could not reconcile node pool with Rancher state in cluster.management.cattle.io")
+			logrus.Warnf("[oraclecontainerengine] could not reconcile node pool(s) with Rancher state in cluster.management.cattle.io")
 		}
 	}
 
@@ -1312,7 +1322,7 @@ func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts
 		return errors.Wrap(npErr, "[oraclecontainerengine] could not reconcile cluster")
 	}
 
-	logrus.Info("[oraclecontainerengine] Node pool update initiated successfully")
+	logrus.Info("[oraclecontainerengine] Node pool(s) update initiated successfully")
 	return nil
 }
 
