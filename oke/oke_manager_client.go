@@ -415,6 +415,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (string, error) {
 	logrus.Tracef("[oraclecontainerengine] getImageID(...) called")
 	request := containerengine.GetNodePoolOptionsRequest{
+		CompartmentId:    common.String(compartment),
 		NodePoolOptionId: common.String("all"),
 	}
 
