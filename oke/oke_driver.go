@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/oracle/oci-go-sdk/v65/common"
+	"github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
 	"github.com/rancher/kontainer-engine/types"
@@ -722,14 +723,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 
 func (s *State) validate() error {
 	logrus.Tracef("[oraclecontainerengine] validate(...) called")
-	if s.PrivateKeyPath == "" && s.PrivateKeyContents == "" {
-		return fmt.Errorf(`"private-key-path or private-key-contents" are required`)
-	} else if s.TenancyID == "" {
+	if s.TenancyID == "" {
 		return fmt.Errorf(`"tenancy-id" is required`)
-	} else if s.UserOCID == "" {
-		return fmt.Errorf(`"user-ocid" is required`)
-	} else if s.Fingerprint == "" {
-		return fmt.Errorf(`"fingerprint" is required`)
 	} else if s.CompartmentID == "" {
 		return fmt.Errorf(`"compartment-id" is required`)
 	} else if s.Region == "" {
@@ -1320,13 +1315,37 @@ func (d *OKEDriver) reconcile(ctx context.Context, info *types.ClusterInfo, opts
 // NewClusterManagerClient based on the state.
 func constructClusterManagerClient(ctx context.Context, state State) (ClusterManagerClient, error) {
 	logrus.Tracef("[oraclecontainerengine] constructClusterManagerClient(...) called")
-	configurationProvider := common.NewRawConfigurationProvider(
-		state.TenancyID,
-		state.UserOCID,
-		state.Region,
-		state.Fingerprint,
-		state.PrivateKeyContents,
-		&state.PrivateKeyPassphrase)
+
+	var configurationProvider common.ConfigurationProvider
+	var err error
+	if len(state.UserOCID) > 0 {
+		logrus.Info("[oraclecontainerengine] using private key for authentication")
+		configurationProvider = common.NewRawConfigurationProvider(
+			state.TenancyID,
+			state.UserOCID,
+			state.Region,
+			state.Fingerprint,
+			state.PrivateKeyContents,
+			&state.PrivateKeyPassphrase,
+		)
+	} else {
+		var authErr error
+
+		logrus.Info("[oraclecontainerengine] trying instance principals for authentication...")
+		configurationProvider, authErr = auth.InstancePrincipalConfigurationProvider()
+		if authErr == nil {
+			logrus.Info("[oraclecontainerengine] using instance principals for authentication")
+		} else {
+			logrus.Info("[oraclecontainerengine] trying workload identity for authentication...")
+			configurationProvider, authErr = auth.OkeWorkloadIdentityConfigurationProvider()
+			if authErr == nil {
+				logrus.Info("[oraclecontainerengine] using workload identity for authentication")
+			} else {
+				logrus.Error("[oraclecontainerengine] failed to authenticate using private key, instance principals, or workload identity")
+				return ClusterManagerClient{}, authErr
+			}
+		}
+	}
 
 	clusterMgrClient, err := NewClusterManagerClient(configurationProvider)
 	if err != nil {
