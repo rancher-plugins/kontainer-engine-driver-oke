@@ -220,7 +220,7 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 		return fmt.Errorf("[oraclecontainerengine] could not retrieve clusterID")
 	}
 
-	logrus.Infof("[oraclecontainerengine] OKE cluster ID: %s has been created", *clusterID)
+	logrus.Infof("[oraclecontainerengine] Kubernetes Engine (OKE) cluster ID: %s has been created", *clusterID)
 	state.ClusterID = *clusterID
 
 	return nil
@@ -280,7 +280,7 @@ func (mgr *ClusterManagerClient) GetClusterByName(ctx context.Context, compartme
 // CreateNodePool creates a new node pool (i.e. a set of compute nodes) for the
 // cluster, or an error.
 // TODO stop passing in state
-func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *State, vcnID string, serviceSubnetIds, nodeSubnetIds []string) error {
+func (mgr *ClusterManagerClient) CreateNodePools(ctx context.Context, state *State, vcnID string, serviceSubnetIds, nodeSubnetIds []string) error {
 	logrus.Tracef("[oraclecontainerengine] CreateNodePool(...) called")
 	if state == nil {
 		return fmt.Errorf("[oraclecontainerengine] valid state is required")
@@ -314,10 +314,138 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 
 	req := identity.ListAvailabilityDomainsRequest{}
 	req.CompartmentId = &state.CompartmentID
+
+	nodePoolPlacements, err := mgr.createNodePoolPlacements(ctx, state, nodeSubnetIds)
+	if err != nil {
+		logrus.Errorf("[oraclecontainerengine] Could not create node pool placements")
+		return err
+	}
+
+	for _, npPlacement := range nodePoolPlacements {
+		npReq.Name = common.String(state.Name + "-" + nodePoolNameFromPlacement(npPlacement[0]))
+		npReq.CompartmentId = common.String(state.CompartmentID)
+		npReq.ClusterId = &state.ClusterID
+		npReq.KubernetesVersion = &state.KubernetesVersion
+		npReq.NodeShape = common.String(state.NodePool.NodeShape)
+		if state.NodePool.FlexOCPUs != 0 {
+			logrus.Debugf("[oraclecontainerengine] creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
+			var ocpus = float32(state.NodePool.FlexOCPUs)
+			npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
+		}
+		if state.NodePool.FlexMemoryInGBs != 0 {
+			logrus.Debugf("[oraclecontainerengine] creating node-pool with %d GB of memory", state.NodePool.FlexOCPUs)
+			var memory = float32(state.NodePool.FlexMemoryInGBs)
+			npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{MemoryInGBs: &memory}
+		}
+
+		// Node-pool subnet(s) used for node instances in the node pool.
+		// These subnets should be different from the cluster Kubernetes Service LB subnets.
+		npReq.InitialNodeLabels = []containerengine.KeyValue{{Key: common.String("driver"), Value: common.String("oraclekubernetesengine")}}
+
+		if state.NodePool.NodePublicSSHKeyContents != "" {
+			npReq.SshPublicKey = common.String(state.NodePool.NodePublicSSHKeyContents)
+		}
+		if state.NodePool.NodeUserDataContents != "" {
+			nodeMetadata := make(map[string]string)
+			nodeMetadata["user_data"] = ensureBase64Encode(state.NodePool.NodeUserDataContents)
+			npReq.NodeMetadata = nodeMetadata
+		}
+		npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
+			PlacementConfigs: npPlacement,
+			Size:             common.Int(int(state.NodePool.QuantityPerSubnet)),
+			FreeformTags:     map[string]string{"driver": "oraclekubernetesengine"},
+		}
+
+		if state.Network.PodNetwork != "" && strings.Contains(strings.ToLower(state.Network.PodNetwork), "native") {
+			subnetId := ""
+			if len(state.Network.PodSubnetName) > 0 {
+				subnetId, err = mgr.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.PodSubnetName)
+			} else {
+				subnetId, err = mgr.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
+			}
+			if err != nil {
+				logrus.Errorf("[oraclecontainerengine] fetching node pool subnet ID for %s failed with error %v", state.Network.NodePoolSubnetName, err)
+				return err
+			}
+			npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.OciVcnIpNativeNodePoolPodNetworkOptionDetails{
+				PodSubnetIds:   []string{subnetId},
+				MaxPodsPerNode: common.Int(110),
+			}
+		}
+		//npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.FlannelOverlayNodePoolPodNetworkOptionDetails{}
+
+		if len(state.NodePool.EvictionGraceDuration) > 0 {
+			npReq.NodeEvictionNodePoolSettings = &containerengine.NodeEvictionNodePoolSettings{}
+			npReq.NodeEvictionNodePoolSettings.EvictionGraceDuration = common.String(state.NodePool.EvictionGraceDuration)
+			npReq.NodeEvictionNodePoolSettings.IsForceDeleteAfterGraceDuration = common.Bool(state.NodePool.ForceDeleteAfterGraceDuration)
+		}
+
+		createNodePoolResp, err := mgr.containerEngineClient.CreateNodePool(ctx, npReq)
+		if err != nil {
+			logrus.Warnf("[oraclecontainerengine] create node pool request failed with error %v", err)
+			// Continue creating node pools.
+		}
+
+		if state.WaitNodesActive > 0 {
+			// wait until cluster creation work request complete
+			logrus.Infof("[oraclecontainerengine] Waiting for node pool to be created for cluster [%s]...", state.Name)
+			// initial delay since subsequent back-off function waits longer each time the retry fails
+			time.Sleep(time.Minute * 5)
+			workReqRespNodePool, err := waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
+			if err != nil {
+				logrus.Errorf("[oraclecontainerengine] get work request for node pool creation failed with error %v", err)
+				return err
+			}
+			logrus.Infof("[oraclecontainerengine] Done waiting for node pool to be created for cluster [%s]", state.Name)
+			// Wait for at least one individual nodes in the node pool to be created
+			if state.NodePool.QuantityPerSubnet > 0 {
+				nodePoolID := getContainerEngineResourceID(workReqRespNodePool.Resources, containerengine.WorkRequestResourceActionTypeCreated,
+					string(containerengine.ListWorkRequestsResourceTypeNodepool))
+				if nodePoolID == nil {
+					return fmt.Errorf("[oraclecontainerengine] could not retrieve node pool ID")
+				}
+
+				doneWaiting := false
+				for retry := 15; retry > 0; retry-- {
+					np, err := mgr.GetNodePoolByID(ctx, *nodePoolID)
+					if err != nil {
+						doneWaiting = true
+					}
+					for _, node := range np.Nodes {
+						if node.LifecycleState != containerengine.NodeLifecycleStateCreating && node.LifecycleState !=
+							containerengine.NodeLifecycleStateUpdating && node.LifecycleState !=
+							containerengine.NodeLifecycleStateFailing {
+							doneWaiting = true
+							break
+						}
+						time.Sleep(1 * time.Minute)
+					}
+					if doneWaiting {
+						break
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+func (mgr *ClusterManagerClient) createNodePoolPlacements(ctx context.Context, state *State, nodeSubnetIds []string) ([][]containerengine.NodePoolPlacementConfigDetails, error) {
+	var placementConfigs [][]containerengine.NodePoolPlacementConfigDetails
+
+	// get Image Id from OKE
+	image, err := mgr.getImageID(ctx, mgr.computeClient, state.CompartmentID, state.NodePool.NodeShape, state.NodePool.NodeImageName)
+	if err != nil {
+		logrus.Errorf("[oraclecontainerengine] Node image ID not found")
+		return placementConfigs, err
+	}
+
+	req := identity.ListAvailabilityDomainsRequest{}
+	req.CompartmentId = &state.CompartmentID
 	allADs, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
 	if err != nil {
 		logrus.Errorf("[oraclecontainerengine] list availablility domain request failed with error %v", err)
-		return err
+		return placementConfigs, err
 	}
 
 	// Our particular image may not be available in every available AD
@@ -332,7 +460,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		listShapes, err := mgr.computeClient.ListShapes(ctx, listShapesReq)
 		if err != nil {
 			logrus.Errorf("[oraclecontainerengine] list shapes request failed with error %v", err)
-			return err
+			return placementConfigs, err
 		}
 		for _, shape := range listShapes.Items {
 			if *shape.Shape == state.NodePool.NodeShape {
@@ -341,125 +469,43 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		}
 	}
 
-	npReq.Name = common.String(state.Name + "-1")
-	npReq.CompartmentId = common.String(state.CompartmentID)
-	npReq.ClusterId = &state.ClusterID
-	npReq.KubernetesVersion = &state.KubernetesVersion
-	npReq.NodeShape = common.String(state.NodePool.NodeShape)
-	if state.NodePool.FlexOCPUs != 0 {
-		logrus.Debugf("[oraclecontainerengine] creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
-		var ocpus = float32(state.NodePool.FlexOCPUs)
-		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
-	}
-	if state.NodePool.FlexMemoryInGBs != 0 {
-		logrus.Debugf("[oraclecontainerengine] creating node-pool with %d GB of memory", state.NodePool.FlexOCPUs)
-		var memory = float32(state.NodePool.FlexMemoryInGBs)
-		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{MemoryInGBs: &memory}
+	ads, err := mgr.identityClient.ListAvailabilityDomains(ctx, req)
+	if err != nil {
+		logrus.Errorf("[oraclecontainerengine] list availablility domain request failed with error %v", err)
+		return placementConfigs, err
 	}
 
-	// Node-pool subnet(s) used for node instances in the node pool.
-	// These subnets should be different from the cluster Kubernetes Service LB subnets.
-	npReq.InitialNodeLabels = []containerengine.KeyValue{{Key: common.String("driver"), Value: common.String("oraclekubernetesengine")}}
-	if state.NodePool.NodePublicSSHKeyContents != "" {
-		npReq.SshPublicKey = common.String(state.NodePool.NodePublicSSHKeyContents)
-	}
-	if state.NodePool.NodeUserDataContents != "" {
-		nodeMetadata := make(map[string]string)
-		nodeMetadata["user_data"] = ensureBase64Encode(state.NodePool.NodeUserDataContents)
-		npReq.NodeMetadata = nodeMetadata
-	}
-	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
-		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(usableADs)),
-		Size:             common.Int(limitN(int(state.NodePool.QuantityPerSubnet)*len(usableADs), int(state.NodePool.LimitNodeCount))),
-	}
-
-	if state.Network.PodNetwork != "" && strings.Contains(strings.ToLower(state.Network.PodNetwork), "native") {
-		subnetId := ""
-		if len(state.Network.PodSubnetName) > 0 {
-			subnetId, err = mgr.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.PodSubnetName)
-		} else {
-			subnetId, err = mgr.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
+	if len(usableADs) > 1 {
+		// Placements based on availability domains
+		for i, adDetails := range usableADs {
+			var nodeSubnetId string
+			if len(nodeSubnetIds) == len(ads.Items) {
+				// use AD specific subnets (possibly coming from an existing VCN)
+				nodeSubnetId = nodeSubnetIds[i]
+			} else {
+				nodeSubnetId = nodeSubnetIds[0]
+			}
+			placementConfigs = append(placementConfigs, []containerengine.NodePoolPlacementConfigDetails{{AvailabilityDomain: adDetails.Name, SubnetId: common.String(nodeSubnetId)}})
 		}
+	} else if len(usableADs) == 1 {
+		// Placements based on fault domains
+		fds, err := mgr.identityClient.ListFaultDomains(ctx, identity.ListFaultDomainsRequest{
+			CompartmentId:      common.String(state.CompartmentID),
+			AvailabilityDomain: ads.Items[0].Name,
+		})
+
 		if err != nil {
-			logrus.Errorf("[oraclecontainerengine] fetching node pool subnet ID for %s failed with error %v", state.Network.NodePoolSubnetName, err)
-			return err
-		}
-		npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.OciVcnIpNativeNodePoolPodNetworkOptionDetails{
-			PodSubnetIds:   []string{subnetId},
-			MaxPodsPerNode: common.Int(110),
-		}
-	}
-	//npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.FlannelOverlayNodePoolPodNetworkOptionDetails{}
-
-	if len(state.NodePool.EvictionGraceDuration) > 0 {
-		npReq.NodeEvictionNodePoolSettings = &containerengine.NodeEvictionNodePoolSettings{}
-		npReq.NodeEvictionNodePoolSettings.EvictionGraceDuration = common.String(state.NodePool.EvictionGraceDuration)
-		npReq.NodeEvictionNodePoolSettings.IsForceDeleteAfterGraceDuration = common.Bool(state.NodePool.ForceDeleteAfterGraceDuration)
-	}
-
-	// Match up subnet(s) to availability domains
-	for i := 0; i < len(usableADs); i++ {
-		nextSubnetId := ""
-		if len(nodeSubnetIds) == 1 {
-			// use a single regional subnet (default)
-			nextSubnetId = nodeSubnetIds[0]
-		} else {
-			// use AD specific subnets (possibly coming from an existing VCN)
-			nextSubnetId = nodeSubnetIds[i]
-		}
-		npReq.NodeConfigDetails.PlacementConfigs = append(npReq.NodeConfigDetails.PlacementConfigs,
-			containerengine.NodePoolPlacementConfigDetails{
-				AvailabilityDomain: usableADs[i].Name,
-				SubnetId:           &nextSubnetId,
-			})
-	}
-
-	createNodePoolResp, err := mgr.containerEngineClient.CreateNodePool(ctx, npReq)
-	if err != nil {
-		logrus.Errorf("[oraclecontainerengine] create node pool request failed with error %v", err)
-		return err
-	}
-
-	// wait until cluster creation work request complete
-	logrus.Infof("[oraclecontainerengine] Waiting for node pool to be created for cluster [%s]...", state.Name)
-	// initial delay since subsequent back-off function waits longer each time the retry fails
-	time.Sleep(time.Minute * 5)
-	workReqRespNodePool, err := waitUntilContainerEngineWorkRequestComplete(mgr.containerEngineClient, createNodePoolResp.OpcWorkRequestId)
-	if err != nil {
-		logrus.Errorf("[oraclecontainerengine] get work request for node pool creation failed with error %v", err)
-		return err
-	}
-	logrus.Infof("[oraclecontainerengine] Done waiting for node pool to be created for cluster [%s]", state.Name)
-	// Wait for at least one individual nodes in the node pool to be created
-	if state.NodePool.QuantityPerSubnet > 0 {
-		nodePoolID := getContainerEngineResourceID(workReqRespNodePool.Resources, containerengine.WorkRequestResourceActionTypeCreated,
-			string(containerengine.ListWorkRequestsResourceTypeNodepool))
-		if nodePoolID == nil {
-			return fmt.Errorf("[oraclecontainerengine] could not retrieve node pool ID")
+			logrus.Errorf("[oraclecontainerengine] list fault domains request failed with error %v", err)
+			return placementConfigs, err
 		}
 
-		doneWaiting := false
-		for retry := 15; retry > 0; retry-- {
-			np, err := mgr.GetNodePoolByID(ctx, *nodePoolID)
-			if err != nil {
-				doneWaiting = true
-			}
-			for _, node := range np.Nodes {
-				if node.LifecycleState != containerengine.NodeLifecycleStateCreating && node.LifecycleState !=
-					containerengine.NodeLifecycleStateUpdating && node.LifecycleState !=
-					containerengine.NodeLifecycleStateFailing {
-					doneWaiting = true
-					break
-				}
-				time.Sleep(1 * time.Minute)
-			}
-			if doneWaiting {
-				break
-			}
+		for _, fdDetails := range fds.Items {
+			placementConfigs = append(placementConfigs, []containerengine.NodePoolPlacementConfigDetails{{AvailabilityDomain: fdDetails.AvailabilityDomain, FaultDomains: []string{*fdDetails.Name}, SubnetId: common.String(nodeSubnetIds[0])}})
 		}
 	}
 
-	return nil
+	return placementConfigs, nil
+
 }
 
 func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (string, error) {
@@ -2341,4 +2387,25 @@ func parseKeyDetails(imageVerificationKmsKeyIDStr string) []containerengine.KeyD
 		keyDetailsArray = append(keyDetailsArray, containerengine.KeyDetails{KmsKeyId: common.String(item)})
 	}
 	return keyDetailsArray
+}
+
+func nodePoolNameFromPlacement(npPlacement containerengine.NodePoolPlacementConfigDetails) string {
+
+	if npPlacement.AvailabilityDomain == nil {
+		return ""
+	}
+	ad := ""
+	fd := ""
+	if strings.Contains(*npPlacement.AvailabilityDomain, ":") {
+		ad = strings.Split(*npPlacement.AvailabilityDomain, ":")[1]
+	} else {
+		ad = *npPlacement.AvailabilityDomain
+	}
+	if len(npPlacement.FaultDomains) == 1 {
+		fd = npPlacement.FaultDomains[0]
+	} else {
+		fd = "fd-1-3"
+	}
+	return strings.ToLower(ad + "-" + fd)
+
 }
