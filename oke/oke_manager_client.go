@@ -146,8 +146,29 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	cReq.CompartmentId = &state.CompartmentID
 	cReq.VcnId = common.String(vcnID)
 
+	if state.Network.PodNetwork != "" && strings.Contains(strings.ToLower(state.Network.PodNetwork), "native") {
+		cReq.ClusterPodNetworkOptions = []containerengine.ClusterPodNetworkOptionDetails{containerengine.OciVcnIpNativeClusterPodNetworkOptionDetails{}}
+	}
+	//cReq.ClusterPodNetworkOptions = []containerengine.ClusterPodNetworkOptionDetails{containerengine.FlannelOverlayClusterPodNetworkOptionDetails{}}
+
 	if state.KmsKeyID != "" {
 		cReq.KmsKeyId = &state.KmsKeyID
+	}
+
+	if state.ImageVerificationKmsKeyID != "" {
+		enableImageVerification := len(state.ImageVerificationKmsKeyID) > 0
+		cReq.ImagePolicyConfig = &containerengine.CreateImagePolicyConfigDetails{
+			IsPolicyEnabled: common.Bool(enableImageVerification),
+			KeyDetails:      parseKeyDetails(state.ImageVerificationKmsKeyID),
+		}
+	}
+
+	if state.ClusterType != "" {
+		if strings.Contains(strings.ToLower(state.ClusterType), "basic") {
+			cReq.Type = containerengine.ClusterTypeBasicCluster
+		} else if strings.Contains(strings.ToLower(state.ClusterType), "enhanced") {
+			cReq.Type = containerengine.ClusterTypeEnhancedCluster
+		}
 	}
 
 	cReq.KubernetesVersion = common.String(state.KubernetesVersion)
@@ -330,6 +351,11 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 		var ocpus = float32(state.NodePool.FlexOCPUs)
 		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
 	}
+	if state.NodePool.FlexMemoryInGBs != 0 {
+		logrus.Debugf("[oraclecontainerengine] creating node-pool with %d GB of memory", state.NodePool.FlexOCPUs)
+		var memory = float32(state.NodePool.FlexMemoryInGBs)
+		npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{MemoryInGBs: &memory}
+	}
 
 	// Node-pool subnet(s) used for node instances in the node pool.
 	// These subnets should be different from the cluster Kubernetes Service LB subnets.
@@ -339,12 +365,36 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	}
 	if state.NodePool.NodeUserDataContents != "" {
 		nodeMetadata := make(map[string]string)
-		nodeMetadata["user_data"] = state.NodePool.NodeUserDataContents
+		nodeMetadata["user_data"] = ensureBase64Encode(state.NodePool.NodeUserDataContents)
 		npReq.NodeMetadata = nodeMetadata
 	}
 	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
 		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(usableADs)),
 		Size:             common.Int(limitN(int(state.NodePool.QuantityPerSubnet)*len(usableADs), int(state.NodePool.LimitNodeCount))),
+	}
+
+	if state.Network.PodNetwork != "" && strings.Contains(strings.ToLower(state.Network.PodNetwork), "native") {
+		subnetId := ""
+		if len(state.Network.PodSubnetName) > 0 {
+			subnetId, err = mgr.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.PodSubnetName)
+		} else {
+			subnetId, err = mgr.GetSubnetIDByName(ctx, state.Network.VcnCompartmentID, vcnID, state.Network.NodePoolSubnetName)
+		}
+		if err != nil {
+			logrus.Errorf("[oraclecontainerengine] fetching node pool subnet ID for %s failed with error %v", state.Network.NodePoolSubnetName, err)
+			return err
+		}
+		npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.OciVcnIpNativeNodePoolPodNetworkOptionDetails{
+			PodSubnetIds:   []string{subnetId},
+			MaxPodsPerNode: common.Int(110),
+		}
+	}
+	//npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.FlannelOverlayNodePoolPodNetworkOptionDetails{}
+
+	if len(state.NodePool.EvictionGraceDuration) > 0 {
+		npReq.NodeEvictionNodePoolSettings = &containerengine.NodeEvictionNodePoolSettings{}
+		npReq.NodeEvictionNodePoolSettings.EvictionGraceDuration = common.String(state.NodePool.EvictionGraceDuration)
+		npReq.NodeEvictionNodePoolSettings.IsForceDeleteAfterGraceDuration = common.Bool(state.NodePool.ForceDeleteAfterGraceDuration)
 	}
 
 	// Match up subnet(s) to availability domains
@@ -415,6 +465,7 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 func (mgr *ClusterManagerClient) getImageID(ctx context.Context, c core.ComputeClient, compartment, shape, displayName string) (string, error) {
 	logrus.Tracef("[oraclecontainerengine] getImageID(...) called")
 	request := containerengine.GetNodePoolOptionsRequest{
+		CompartmentId:    common.String(compartment),
 		NodePoolOptionId: common.String("all"),
 	}
 
