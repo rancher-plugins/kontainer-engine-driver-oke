@@ -156,6 +156,10 @@ type NetworkConfiguration struct {
 	NodePoolSubnetSecurityListName string
 	// Optional name of node pool dns domain name
 	NodePoolSubnetDnsDomainName string
+	// Pod Network plugin
+	PodNetwork string
+	// Optional pre-existing subnet that pods will be assigned IPs from when using native pod networking
+	PodSubnetName string
 	// Optional name of the service subnet security list
 	ServiceSubnetSecurityListName string
 	// Optional name of the service subnet dns domain name
@@ -410,6 +414,20 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 			DefaultString: podCIDRBlock,
 		},
 	}
+	driverFlag.Options["pod-network"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Container Network Interface (CNI) plugin to use for the pod network. Options are FLANNEL_OVERLAY (default) or OCI_VCN_IP_NATIVE",
+		Default: &types.Default{
+			DefaultString: "FLANNEL_OVERLAY",
+		},
+	}
+	driverFlag.Options["pod-subnet-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The name of the existing subnet that pods will be assigned IPs from when --pod-network=OCI_VCN_IP_NATIVE",
+		Default: &types.Default{
+			DefaultString: "",
+		},
+	}
 	driverFlag.Options["quantity-of-node-subnets"] = &types.Flag{
 		Type:  types.IntType,
 		Usage: "Number of node subnets (defaults to one in each AD)",
@@ -631,6 +649,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		QuantityOfSubnets:              options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
 		PodCidr:                        options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-cidr", "podCidr").(string),
 		ServiceCidr:                    options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-cidr", "serviceCidr").(string),
+		PodNetwork:                     options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-network", "podNetwork").(string),
+		PodSubnetName:                  options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-subnet-name", "podSubnetName").(string),
 		NodePoolSubnetName:             options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-name", "nodePoolSubnetName").(string),
 		NodePoolSubnetSecurityListName: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-security-list-name", "nodePoolSubnetSecurityListName").(string),
 		NodePoolSubnetDnsDomainName:    options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-dns-domain-list-name", "nodePoolSubnetDnsDomainName").(string),

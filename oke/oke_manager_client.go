@@ -145,6 +145,9 @@ func (mgr *ClusterManagerClient) CreateCluster(ctx context.Context, state *State
 	cReq.Name = common.String(state.Name)
 	cReq.CompartmentId = &state.CompartmentID
 	cReq.VcnId = common.String(vcnID)
+	if state.Network.PodNetwork == "OCI_VCN_IP_NATIVE" {
+		cReq.ClusterPodNetworkOptions = []containerengine.ClusterPodNetworkOptionDetails{containerengine.ClusterPodNetworkOptionDetails(containerengine.ClusterPodNetworkOptionDetailsCniTypeOciVcnIpNative)}
+	}
 
 	if state.KmsKeyID != "" {
 		cReq.KmsKeyId = &state.KmsKeyID
@@ -345,6 +348,12 @@ func (mgr *ClusterManagerClient) CreateNodePool(ctx context.Context, state *Stat
 	npReq.NodeConfigDetails = &containerengine.CreateNodePoolNodeConfigDetails{
 		PlacementConfigs: make([]containerengine.NodePoolPlacementConfigDetails, 0, len(usableADs)),
 		Size:             common.Int(limitN(int(state.NodePool.QuantityPerSubnet)*len(usableADs), int(state.NodePool.LimitNodeCount))),
+	}
+
+	if state.Network.PodNetwork == "OCI_VCN_IP_NATIVE" {
+		npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.OciVcnIpNativeNodePoolPodNetworkOptionDetails{
+			PodSubnetIds: []string{state.Network.PodSubnetName},
+		}
 	}
 
 	// Match up subnet(s) to availability domains
