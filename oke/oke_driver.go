@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/oracle/oci-go-sdk/v65/common"
+	"github.com/oracle/oci-go-sdk/v65/common/auth"
 	"github.com/pkg/errors"
 	"github.com/rancher/kontainer-engine/drivers/options"
 	"github.com/rancher/kontainer-engine/types"
@@ -156,6 +157,10 @@ type NetworkConfiguration struct {
 	NodePoolSubnetSecurityListName string
 	// Optional name of node pool dns domain name
 	NodePoolSubnetDnsDomainName string
+	// Pod Network plugin
+	PodNetwork string
+	// Optional pre-existing subnet that pods will be assigned IPs from when using native pod networking
+	PodSubnetName string
 	// Optional name of the service subnet security list
 	ServiceSubnetSecurityListName string
 	// Optional name of the service subnet dns domain name
@@ -241,7 +246,7 @@ func (d *OKEDriver) Remove(ctx context.Context, info *types.ClusterInfo) error {
 		return errors.Wrap(err, "[oraclecontainerengine] could not get virtual cloud network (VCN) by id")
 	}
 
-	logrus.Info("[oraclecontainerengine] Deleting cluster [%s]", state.Name)
+	logrus.Infof("[oraclecontainerengine] Deleting cluster [%s]", state.Name)
 	err = oke.DeleteCluster(ctx, state.ClusterID)
 	if err != nil {
 		return errors.Wrap(err, "[oraclecontainerengine] could not delete cluster")
@@ -408,6 +413,20 @@ func (d *OKEDriver) GetDriverCreateOptions(ctx context.Context) (*types.DriverFl
 		Usage: "A CIDR IP range from which to assign Kubernetes Pod IPs",
 		Default: &types.Default{
 			DefaultString: podCIDRBlock,
+		},
+	}
+	driverFlag.Options["pod-network"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "Container Network Interface (CNI) plugin to use for the pod network. Options are FLANNEL_OVERLAY (default) or OCI_VCN_IP_NATIVE",
+		Default: &types.Default{
+			DefaultString: "FLANNEL_OVERLAY",
+		},
+	}
+	driverFlag.Options["pod-subnet-name"] = &types.Flag{
+		Type:  types.StringType,
+		Usage: "The name of the existing subnet that pods will be assigned IPs from when --pod-network=OCI_VCN_IP_NATIVE",
+		Default: &types.Default{
+			DefaultString: "",
 		},
 	}
 	driverFlag.Options["quantity-of-node-subnets"] = &types.Flag{
@@ -588,7 +607,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 	state.SkipVCNDelete = options.GetValueFromDriverOptions(driverOptions, types.BoolType, "skip-vcn-delete", "skipVcnDelete").(bool)
 	state.Fingerprint = options.GetValueFromDriverOptions(driverOptions, types.StringType, "fingerprint", "fingerprint").(string)
 	state.KmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "kms-key-id", "kmsKeyId").(string)
-	state.ImageVerificationKmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "image-verification-kms-key-id", "imageVerificationKmsKeyID").(string)
+	state.ImageVerificationKmsKeyID = options.GetValueFromDriverOptions(driverOptions, types.StringType, "image-verification-kms-key-id", "imageVerificationKmsKeyId").(string)
 	state.ClusterType = options.GetValueFromDriverOptions(driverOptions, types.StringType, "cluster-type", "clusterType").(string)
 	state.LogLevel = options.GetValueFromDriverOptions(driverOptions, types.StringType, "log-level", "logLevel").(string)
 
@@ -630,6 +649,8 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		ServiceLBSubnet2Name:           options.GetValueFromDriverOptions(driverOptions, types.StringType, "load-balancer-subnet-name-2", "loadBalancerSubnetName2").(string),
 		QuantityOfSubnets:              options.GetValueFromDriverOptions(driverOptions, types.IntType, "quantity-of-node-subnets", "quantityOfNodeSubnets").(int64),
 		PodCidr:                        options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-cidr", "podCidr").(string),
+		PodNetwork:                     options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-network", "podNetwork").(string),
+		PodSubnetName:                  options.GetValueFromDriverOptions(driverOptions, types.StringType, "pod-subnet-name", "podSubnetName").(string),
 		ServiceCidr:                    options.GetValueFromDriverOptions(driverOptions, types.StringType, "service-cidr", "serviceCidr").(string),
 		NodePoolSubnetName:             options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-name", "nodePoolSubnetName").(string),
 		NodePoolSubnetSecurityListName: options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-pool-subnet-security-list-name", "nodePoolSubnetSecurityListName").(string),
@@ -717,19 +738,22 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		}
 	}
 
+	if len(state.NodePool.EvictionGraceDuration) > 0 {
+		if !strings.HasPrefix(state.NodePool.EvictionGraceDuration, "PT") {
+			state.NodePool.EvictionGraceDuration = "PT" + state.NodePool.EvictionGraceDuration
+		}
+		if !strings.HasSuffix(state.NodePool.EvictionGraceDuration, "M") {
+			state.NodePool.EvictionGraceDuration = state.NodePool.EvictionGraceDuration + "M"
+		}
+	}
+
 	return state, state.validate()
 }
 
 func (s *State) validate() error {
 	logrus.Tracef("[oraclecontainerengine] validate(...) called")
-	if s.PrivateKeyPath == "" && s.PrivateKeyContents == "" {
-		return fmt.Errorf(`"private-key-path or private-key-contents" are required`)
-	} else if s.TenancyID == "" {
+	if s.TenancyID == "" {
 		return fmt.Errorf(`"tenancy-id" is required`)
-	} else if s.UserOCID == "" {
-		return fmt.Errorf(`"user-ocid" is required`)
-	} else if s.Fingerprint == "" {
-		return fmt.Errorf(`"fingerprint" is required`)
 	} else if s.CompartmentID == "" {
 		return fmt.Errorf(`"compartment-id" is required`)
 	} else if s.Region == "" {
