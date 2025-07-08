@@ -1988,6 +1988,11 @@ func (mgr *ClusterManagerClient) CreateNodeSecurityList(ctx context.Context, sta
 			},
 		})
 	}
+	// Allow internal traffic from OKE control plane by default
+	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
+		Protocol: common.String("all"),
+		Source:   common.String(controlPlaneCIDRBlock),
+	})
 	// Allow internal traffic from other worker nodes by default
 	nodeSecList.IngressSecurityRules = append(nodeSecList.IngressSecurityRules, core.IngressSecurityRule{
 		Protocol: common.String("all"),
