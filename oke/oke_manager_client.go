@@ -328,14 +328,9 @@ func (mgr *ClusterManagerClient) CreateNodePools(ctx context.Context, state *Sta
 		npReq.KubernetesVersion = &state.KubernetesVersion
 		npReq.NodeShape = common.String(state.NodePool.NodeShape)
 		if state.NodePool.FlexOCPUs != 0 {
-			logrus.Debugf("[oraclecontainerengine] creating node-pool with %d OCPUs", state.NodePool.FlexOCPUs)
-			var ocpus = float32(state.NodePool.FlexOCPUs)
-			npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: &ocpus}
-		}
-		if state.NodePool.FlexMemoryInGBs != 0 {
-			logrus.Debugf("[oraclecontainerengine] creating node-pool with %d GB of memory", state.NodePool.FlexOCPUs)
-			var memory = float32(state.NodePool.FlexMemoryInGBs)
-			npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{MemoryInGBs: &memory}
+			// Flex memory is defaulted to 16 * the number of OCPUs if unset
+			logrus.Debugf("[oraclecontainerengine] creating node-pool with %d GB of memory %d OCPUs", state.NodePool.FlexOCPUs, state.NodePool.FlexOCPUs)
+			npReq.NodeShapeConfig = &containerengine.CreateNodeShapeConfigDetails{Ocpus: common.Float32(float32(state.NodePool.FlexOCPUs)), MemoryInGBs: common.Float32(float32(state.NodePool.FlexMemoryInGBs))}
 		}
 
 		// Node-pool subnet(s) used for node instances in the node pool.
