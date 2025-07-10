@@ -1,13 +1,15 @@
 module github.com/rancher-plugins/kontainer-engine-driver-oke
 
-go 1.21.3
+go 1.23.0
+
+toolchain go1.24.0
 
 require (
-	github.com/oracle/oci-go-sdk/v65 v65.53.0
+	github.com/oracle/oci-go-sdk/v65 v65.95.1
 	github.com/pkg/errors v0.9.1
 	github.com/rancher/kontainer-engine v0.0.4-dev.0.20210625182816-1a4f4e73a324
 	github.com/sirupsen/logrus v1.9.3
-	golang.org/x/net v0.19.0
+	golang.org/x/net v0.41.0
 	gopkg.in/yaml.v2 v2.4.0
 	k8s.io/api v0.27.8
 	k8s.io/apimachinery v0.27.8
@@ -46,10 +48,12 @@ require (
 	github.com/sony/gobreaker v0.5.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/urfave/cli v1.22.14 // indirect
+	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
+	golang.org/x/crypto v0.39.0 // indirect
 	golang.org/x/oauth2 v0.15.0 // indirect
-	golang.org/x/sys v0.15.0 // indirect
-	golang.org/x/term v0.15.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/sys v0.33.0 // indirect
+	golang.org/x/term v0.32.0 // indirect
+	golang.org/x/text v0.26.0 // indirect
 	golang.org/x/time v0.5.0 // indirect
 	google.golang.org/appengine v1.6.8 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231127180814-3a041ad873d4 // indirect
