@@ -628,7 +628,7 @@ func GetStateFromOpts(driverOptions *types.DriverOptions) (State, error) {
 		EvictionGraceDuration:         options.GetValueFromDriverOptions(driverOptions, types.StringType, "eviction-grace-duration", "evictionGraceDuration").(string),
 		ForceDeleteAfterGraceDuration: options.GetValueFromDriverOptions(driverOptions, types.BoolType, "force-delete-after-grace-duration", "forceDeleteAfterGraceDuration").(bool),
 		FlexOCPUs:                     options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-ocpus", "flexOcpus").(int64),
-		FlexMemoryInGBs:               options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-memory-in-gbs", "flexMemoryInGBs").(int64),
+		FlexMemoryInGBs:               options.GetValueFromDriverOptions(driverOptions, types.IntType, "flex-memory-in-gbs", "flexMemoryInGbs").(int64),
 		CustomBootVolumeSize:          options.GetValueFromDriverOptions(driverOptions, types.IntType, "custom-boot-volume-size", "customBootVolumeSize").(int64),
 		NodeImageName:                 options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-image", "nodeImage").(string),
 		NodeShape:                     options.GetValueFromDriverOptions(driverOptions, types.StringType, "node-shape", "nodeShape").(string),
