@@ -363,8 +363,8 @@ func (mgr *ClusterManagerClient) CreateNodePools(ctx context.Context, state *Sta
 				return err
 			}
 			npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.OciVcnIpNativeNodePoolPodNetworkOptionDetails{
-				PodSubnetIds:   []string{subnetId},
-				MaxPodsPerNode: common.Int(110),
+				PodSubnetIds: []string{subnetId},
+				//MaxPodsPerNode: common.Int(110),
 			}
 		}
 		//npReq.NodeConfigDetails.NodePoolPodNetworkOptionDetails = containerengine.FlannelOverlayNodePoolPodNetworkOptionDetails{}
