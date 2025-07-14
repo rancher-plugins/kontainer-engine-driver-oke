@@ -1085,9 +1085,11 @@ func (d *OKEDriver) PostCheck(ctx context.Context, info *types.ClusterInfo) (*ty
 			// Avoid unnecessary cluster creation when state.PrivateControlPlane == true and inaccessible by Rancher.
 			// Results in cluster stuck in "Waiting for API to be available" (rather than the cluster being re-created over and over).
 			// Alternatively, we could set a more useful error message about the API server not being reachable.
-			return info, nil
+			logrus.Errorf("[oraclecontainerengine] failed to generate service account token from OKE kubeconfig of a private control plane: %v", err)
+			return nil, errors.Wrap(err, "[oraclecontainerengine] could not generate service account token from kubeconfig of a private control plane")
 		}
-		return nil, errors.Wrap(err, "[oraclecontainerengine] could not generate service account token from OKE kubeconfig")
+
+		return nil, errors.Wrap(err, "[oraclecontainerengine] could not generate service account token from kubeconfig")
 	}
 
 	return info, nil
